@@ -1,0 +1,25 @@
+{
+  "name": "gt6-rafa-fuga-de-vice-city",
+  "version": "1.0.0",
+  "description": "GT6 RAFA: FUGA DE VICE CITY (EDTECH PT-13 EDITION) — 3D GTA 6 Infinite Runner with Three.js, Web Audio Police Scanner, Supabase Cloud Leaderboard & Vercel Serverless API.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "gta6",
+    "vice-city",
+    "rafa-pt13",
+    "edtech",
+    "threejs",
+    "infinite-runner",
+    "supabase",
+    "vercel"
+  ],
+  "author": "EDTECH PT-13 Studio",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

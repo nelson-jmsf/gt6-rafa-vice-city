@@ -1,0 +1,98 @@
+{
+  "title": "GT6 RAFA: FUGA DE VICE CITY (EDTECH PT-13 EDITION)",
+  "version": "1.0.0",
+  "assets": {
+    "poster": {
+      "path": "./assets/rafa-poster.jpg",
+      "mimeType": "image/jpeg",
+      "bytes": 536018,
+      "description": "GTA 6 Vice City key artwork featuring Rafa wearing glasses, beard, and black leather biker jacket with red 'PT 13' patch and 'EDTECH' gear emblem, riding a red fat-tire electric chopper with 6 Wanted Stars and a police helicopter searchlight overhead."
+    },
+    "chaseVideo": {
+      "path": "./assets/rafa-chase.mp4",
+      "mimeType": "video/mp4",
+      "bytes": 8483449,
+      "durationSeconds": 15.0,
+      "description": "High-speed GTA 6 Vice City night pursuit cutscene and live Heli-Cam feed: Rafa on his red EDTECH fat-tire electric scooter escaping 6-star POLICE cruisers and helicopter searchlight, jumping a ramp over a multi-car police blockade with sparks flying, HUD cash $1956791-$1956898 and weapon 558-30."
+    }
+  },
+  "characterTheme": {
+    "protagonist": "Rafa (PT-13 / EDTECH)",
+    "appearance": "Glasses, full beard, black biker jacket with red 'PT 13' badge on chest and 'EDTECH' gear logo on sleeve",
+    "vehicle": {
+      "name": "EDTECH Fat-Tire Electric Chopper PT-13",
+      "color": "Crimson Red & Matte Black",
+      "features": [
+        "Oversized fat tires with neon rim reflection",
+        "EDTECH high-voltage lithium battery core",
+        "Bright round LED projector headlight",
+        "Yellow lightning bolt decal on red front fender",
+        "High-arc chopper handlebars with twin mirrors"
+      ]
+    },
+    "environment": {
+      "city": "Vice City (Night / Wet Neon Asphalt)",
+      "wantedLevel": 6,
+      "startingBountyCash": 1956791,
+      "highlightBountyCash": 1956898,
+      "hudWeaponAmmo": "558-30",
+      "pursuitUnits": [
+        "VCPD Black & White Police Cruisers",
+        "Multi-lane Police Roadblocks with Barricades",
+        "VCPD Air Support Helicopter with Tactical Searchlight"
+      ]
+    }
+  },
+  "policeDispatchTranscript": [
+    {
+      "id": "dispatch_1",
+      "key": "avenida",
+      "aliases": ["start", "fuga", "avenida", "1", 0],
+      "speaker": "COPOM CENTRAL",
+      "text": "Atenção todas as unidades, suspeito em fuga na avenida!",
+      "startTime": 0.1,
+      "endTime": 3.2,
+      "wantedStarsMin": 1
+    },
+    {
+      "id": "dispatch_2",
+      "key": "reforcos",
+      "aliases": ["speed", "alta_velocidade", "reforcos", "stars", "2", 1],
+      "speaker": "COPOM CENTRAL",
+      "text": "Ele está em alta velocidade, enviem reforços!",
+      "startTime": 3.2,
+      "endTime": 6.1,
+      "wantedStarsMin": 2
+    },
+    {
+      "id": "dispatch_3",
+      "key": "bloqueio",
+      "aliases": ["roadblock", "jump", "ramp", "bloqueio", "furando", "3", 2],
+      "speaker": "VIATURA VCPD-13",
+      "text": "Cuidado, ele está furando o bloqueio!",
+      "startTime": 6.1,
+      "endTime": 9.1,
+      "wantedStarsMin": 3
+    },
+    {
+      "id": "dispatch_4",
+      "key": "aereo",
+      "aliases": ["heli", "helicopter", "aereo", "apoio_aereo", "5stars", "4", 3],
+      "speaker": "ÁGUIA VCPD AIR-1",
+      "text": "Apoio aéreo a caminho, cerquem a área!",
+      "startTime": 9.1,
+      "endTime": 12.1,
+      "wantedStarsMin": 5
+    },
+    {
+      "id": "dispatch_5",
+      "key": "escapar",
+      "aliases": ["surround", "cerco", "6stars", "escapar", "fechem", "max_heat", "max_wanted", "roadblock_warn", "5", 4],
+      "speaker": "COMANDO TÁTICO 6★",
+      "text": "Não deixem ele escapar, fechem a via!",
+      "startTime": 12.1,
+      "endTime": 14.9,
+      "wantedStarsMin": 6
+    }
+  ]
+}

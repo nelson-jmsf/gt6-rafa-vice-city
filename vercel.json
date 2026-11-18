@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "name": "gt6-rafa-fuga-de-vice-city",
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/api/leaderboard",
+      "destination": "/api/leaderboard.js"
+    },
+    {
+      "source": "/api/telemetry",
+      "destination": "/api/telemetry.js"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization, apikey, x-supabase-url, x-supabase-key, x-supabase-anon-key"
+        },
+        { "key": "Cache-Control", "value": "no-store, max-age=0" }
+      ]
+    },
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Accept-Ranges", "value": "bytes" },
+        { "key": "Cache-Control", "value": "public, max-age=86400" }
+      ]
+    }
+  ]
+}

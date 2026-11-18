@@ -1,0 +1,1565 @@
+/* ==========================================================================
+   GT6 RAFA: FUGA DE VICE CITY (EDTECH PT-13 EDITION)
+   Authentic GTA 6 Vice City HUD, Cutscene Player & Responsive Styles
+   ========================================================================== */
+
+:root {
+  --bg-deep: #070312;
+  --bg-panel: rgba(11, 7, 26, 0.82);
+  --bg-panel-heavy: rgba(9, 5, 22, 0.94);
+  --vice-pink: #ff2a85;
+  --vice-pink-glow: rgba(255, 42, 133, 0.55);
+  --edtech-cyan: #00f0ff;
+  --edtech-cyan-glow: rgba(0, 240, 255, 0.5);
+  --pt13-red: #ff2238;
+  --gta-cash: #55b848;
+  --gta-cash-bright: #72ef62;
+  --star-gold: #ffd740;
+  --police-red: #ff1744;
+  --police-blue: #2979ff;
+  --text-main: #f5f7ff;
+  --text-muted: #9da8c8;
+  --border-glass: rgba(255, 255, 255, 0.14);
+  --font-display: 'Anton', 'Oswald', Impact, sans-serif;
+  --font-hud: 'Oswald', 'Rajdhani', sans-serif;
+  --font-tech: 'Rajdhani', sans-serif;
+  --font-mono: 'Share Tech Mono', monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html,
+body.gt6-body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 35%, #1a0b36 0%, #070312 75%);
+  color: var(--text-main);
+  font-family: var(--font-tech);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ==========================================================================
+   3D CANVAS & SCREEN FX OVERLAYS
+   ========================================================================== */
+
+.game-canvas-container {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1;
+  background: linear-gradient(180deg, #090418 0%, #190a30 55%, #0a0814 100%);
+}
+
+.game-canvas-container canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.screen-fx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  transition: box-shadow 0.25s ease, opacity 0.25s ease;
+}
+
+/* Police 5-6 Star Red/Blue Edge Strobe (Subtle so 3D view stays 92% clear) */
+.screen-fx-overlay.police-pursuit-fx {
+  animation: policeEdgeStrobe 0.9s infinite alternate ease-in-out;
+}
+
+/* Nitro Cyan/Pink Overdrive FX */
+.screen-fx-overlay.nitro-active-fx {
+  box-shadow: inset 0 0 45px rgba(0, 240, 255, 0.28);
+}
+
+/* Cinematic Ramp Jump Slow-Mo Gold FX */
+.screen-fx-overlay.cinematic-jump-fx {
+  box-shadow: inset 0 0 55px rgba(255, 215, 64, 0.28);
+}
+
+/* Collision Damage Flash */
+.screen-fx-overlay.damage-flash-fx {
+  box-shadow: inset 0 0 85px rgba(255, 23, 68, 0.65) !important;
+}
+
+@keyframes policeEdgeStrobe {
+  0% {
+    box-shadow: inset 18px 0 45px -16px rgba(255, 23, 68, 0.26),
+                inset -18px 0 45px -16px rgba(41, 121, 255, 0.08);
+  }
+  100% {
+    box-shadow: inset 18px 0 45px -16px rgba(255, 23, 68, 0.08),
+                inset -18px 0 45px -16px rgba(41, 121, 255, 0.26);
+  }
+}
+
+/* ==========================================================================
+   MINIMALIST GTA 6 IN-GAME HUD (92% UNOBSTRUCTED 3D VIEWPORT)
+   ========================================================================== */
+
+.sr-only,
+.hud-hidden-legacy {
+  display: none !important;
+}
+
+.gta-hud {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* Allow clicks on HUD interactive controls */
+.gta-hud button,
+.gta-hud .helicam-pip,
+.gta-hud .hud-toolbar,
+.gta-hud .hud-bottom-controls,
+.gta-hud .weapon-ammo-box {
+  pointer-events: auto;
+}
+
+/* --------------------------------------------------------------------------
+   TOP-LEFT: ULTRA-MINIMALIST 28PX TRANSPARENT ICON STRIP (NO CARDS/BOXES)
+   -------------------------------------------------------------------------- */
+
+.hud-top-left {
+  position: fixed;
+  top: 10px;
+  left: 14px;
+  z-index: 14;
+  display: flex;
+  align-items: center;
+}
+
+.hud-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  opacity: 0.45;
+  transition: opacity 0.2s ease;
+}
+
+.hud-toolbar:hover,
+.hud-toolbar:focus-within {
+  opacity: 1;
+}
+
+.hud-tool-btn {
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  border-radius: 50%;
+  padding: 0;
+  font-size: 0.88rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+  transition: transform 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+}
+
+.hud-tool-btn:hover,
+.hud-tool-btn.active {
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--edtech-cyan);
+  transform: scale(1.12);
+}
+
+.minimal-dist-badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.82);
+  text-shadow: 1px 1px 2px #000000;
+  margin-left: 5px;
+  letter-spacing: 0.5px;
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------------------
+   TOP-RIGHT: FRAMELESS GTA WANTED STARS + CASH + 4PX BARS + WEAPON 558-30
+   -------------------------------------------------------------------------- */
+
+.hud-top-right {
+  position: fixed;
+  top: 12px;
+  right: 18px;
+  z-index: 14;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+/* Top Row: 6 Crisp Frameless Stars */
+.wanted-stars-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+}
+
+.wanted-star {
+  font-size: 1.55rem;
+  line-height: 1;
+  color: rgba(12, 15, 22, 0.52);
+  -webkit-text-stroke: 1px rgba(0, 0, 0, 0.55);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  transition: transform 0.18s ease, color 0.18s ease, text-shadow 0.18s ease;
+}
+
+.wanted-star.active {
+  color: #ffffff;
+  -webkit-text-stroke: 1px rgba(0, 0, 0, 0.9);
+  text-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.95),
+    0 0 6px rgba(255, 255, 255, 0.35);
+}
+
+.wanted-stars-row.police-chase-alert .wanted-star.active:nth-child(odd) {
+  animation: starPoliceFlashRed 0.75s infinite alternate;
+}
+
+.wanted-stars-row.police-chase-alert .wanted-star.active:nth-child(even) {
+  animation: starPoliceFlashBlue 0.75s infinite alternate;
+}
+
+@keyframes starPoliceFlashRed {
+  0% { color: #ffffff; text-shadow: 0 2px 4px #000; }
+  100% { color: #ffffff; text-shadow: 0 0 10px rgba(255, 23, 68, 0.85), 0 2px 4px #000; }
+}
+
+@keyframes starPoliceFlashBlue {
+  0% { color: #ffffff; text-shadow: 0 2px 4px #000; }
+  100% { color: #ffffff; text-shadow: 0 0 10px rgba(41, 121, 255, 0.85), 0 2px 4px #000; }
+}
+
+/* Sub-row below stars: Left Column (Cash + 4px Bars) & Right Column (SMG 558-30) */
+.gta-topright-subrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 1px;
+}
+
+.gta-cash-vitals-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.gta-cash-row {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.gta-cash-display {
+  font-family: var(--font-display);
+  font-size: 2.05rem;
+  line-height: 0.95;
+  letter-spacing: 0.8px;
+  color: #5cb85c;
+  -webkit-text-stroke: 1.35px #000000;
+  text-shadow:
+    2px 2px 0 #000000,
+    0 2px 6px rgba(0, 0, 0, 0.85);
+  transition: transform 0.14s ease, color 0.14s ease;
+}
+
+.gta-cash-display.cash-bump {
+  color: #76e076;
+  transform: scale(1.04);
+}
+
+.gta-cash-delta {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--star-gold);
+  -webkit-text-stroke: 1px #000;
+  text-shadow: 1px 2px 0 #000;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.gta-cash-delta.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Thin 4px Red Health Bar & Thin 4px White Armor Bar directly below Cash */
+.vitals-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 118px;
+}
+
+.vital-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.62);
+  border-radius: 1px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+.vital-fill {
+  height: 100%;
+  transition: width 0.2s ease;
+}
+
+.health-fill {
+  background: #e53935;
+}
+
+.armor-fill {
+  background: #ffffff;
+}
+
+/* Right Column: Clean Frameless White SMG Silhouette + 558-30 */
+.weapon-ammo-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.14s ease;
+}
+
+.weapon-ammo-box:hover {
+  transform: scale(1.06);
+}
+
+.weapon-svg {
+  width: 54px;
+  height: 23px;
+  filter: drop-shadow(1px 2px 2px rgba(0, 0, 0, 0.95));
+}
+
+.ammo-readout {
+  font-family: var(--font-hud);
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  margin-top: 1px;
+  text-shadow:
+    -1px -1px 0 #000,
+    1px -1px 0 #000,
+    -1px 1px 0 #000,
+    1px 1px 0 #000,
+    0 2px 4px rgba(0, 0, 0, 0.95);
+}
+
+.ammo-sep {
+  color: #d0d7e2;
+  margin: 0 1px;
+}
+
+/* --------------------------------------------------------------------------
+   CENTER FLOATING STUNT NOTIFICATION (FRAMELESS GTA TEXT)
+   -------------------------------------------------------------------------- */
+
+.cinematic-toast {
+  position: fixed;
+  top: 13%;
+  left: 50%;
+  transform: translate(-50%, -10px) scale(0.94);
+  z-index: 15;
+  pointer-events: none;
+  text-align: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+  opacity: 0;
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.cinematic-toast.visible {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}
+
+.toast-kicker {
+  display: none;
+}
+
+.toast-title {
+  font-family: var(--font-display);
+  font-size: 1.55rem;
+  letter-spacing: 1.2px;
+  color: var(--star-gold);
+  -webkit-text-stroke: 1.2px #000;
+  text-shadow: 2px 2px 0 #000, 0 3px 10px rgba(0, 0, 0, 0.95);
+}
+
+.toast-subtitle {
+  font-family: var(--font-hud);
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #ffffff;
+  letter-spacing: 0.8px;
+  text-shadow: 1px 1px 0 #000, 0 2px 6px rgba(0, 0, 0, 0.95);
+}
+
+/* --------------------------------------------------------------------------
+   PICTURE-IN-PICTURE LIVE HELI-CAM MONITOR (HIDDEN BY DEFAULT)
+   -------------------------------------------------------------------------- */
+
+.helicam-pip {
+  position: fixed;
+  top: 118px;
+  right: 18px;
+  width: 210px;
+  background: rgba(8, 10, 24, 0.88);
+  border: 1px solid rgba(0, 240, 255, 0.38);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.65);
+  z-index: 12;
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+.helicam-pip.hidden-pip {
+  display: none !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.helicam-pip.helicam-highlight {
+  border-color: var(--star-gold);
+  box-shadow: 0 0 20px rgba(255, 215, 64, 0.5);
+}
+
+.helicam-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.72);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.helicam-rec {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.rec-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--police-red);
+  box-shadow: 0 0 6px var(--police-red);
+}
+
+.helicam-title {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: #e2f1ff;
+}
+
+.helicam-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.helicam-mini-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border-radius: 4px;
+  width: 20px;
+  height: 20px;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.helicam-viewport {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: #000;
+}
+
+.helicam-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.helicam-reticle-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.reticle-corner {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-color: rgba(0, 240, 255, 0.7);
+  border-style: solid;
+}
+
+.reticle-corner.tl { top: 6px; left: 6px; border-width: 1.5px 0 0 1.5px; }
+.reticle-corner.tr { top: 6px; right: 6px; border-width: 1.5px 1.5px 0 0; }
+.reticle-corner.bl { bottom: 20px; left: 6px; border-width: 0 0 1.5px 1.5px; }
+.reticle-corner.br { bottom: 20px; right: 6px; border-width: 0 1.5px 1.5px 0; }
+
+.reticle-crosshair {
+  position: absolute;
+  top: 44%;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  border: 1px dashed rgba(255, 215, 64, 0.7);
+  border-radius: 50%;
+}
+
+.helicam-telemetry-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.72);
+  padding: 2px 6px;
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--edtech-cyan);
+}
+
+/* --------------------------------------------------------------------------
+   BOTTOM-LEFT: CLEAN CIRCULAR GTA RADAR MINIMAP (154PX DESKTOP / 120PX MOBILE)
+   -------------------------------------------------------------------------- */
+
+.hud-bottom-left {
+  position: fixed;
+  bottom: 16px;
+  left: 18px;
+  z-index: 14;
+  display: flex;
+  align-items: center;
+}
+
+.radar-outer-ring {
+  position: relative;
+  width: 154px;
+  height: 154px;
+  border-radius: 50%;
+  padding: 0;
+  background: rgba(14, 19, 28, 0.82);
+  border: 2px solid rgba(10, 14, 22, 0.92);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.72);
+}
+
+#radar-canvas {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: block;
+}
+
+/* Tiny N north badge on the LEFT rim (matching the example video) */
+.radar-north-badge {
+  position: absolute;
+  top: 50%;
+  left: -8px;
+  transform: translateY(-50%);
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #0d111a;
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  color: #ffffff;
+  font-family: var(--font-hud);
+  font-size: 0.62rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+}
+
+/* --------------------------------------------------------------------------
+   BOTTOM-CENTER: FRAMELESS CINEMATIC COPOM RADIO SUBTITLES
+   -------------------------------------------------------------------------- */
+
+.radio-subtitle-overlay {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(6px);
+  z-index: 14;
+  pointer-events: none;
+  text-align: center;
+  width: max-content;
+  max-width: min(680px, 66vw);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.28s ease, transform 0.28s ease;
+}
+
+.radio-subtitle-overlay.radio-active {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.radio-subtitle-text {
+  font-family: var(--font-tech);
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.3px;
+  line-height: 1.3;
+  text-shadow:
+    -1px -1px 0 #000000,
+    1px -1px 0 #000000,
+    -1px 1px 0 #000000,
+    1px 1px 0 #000000,
+    0 2px 8px rgba(0, 0, 0, 0.95);
+}
+
+/* --------------------------------------------------------------------------
+   TOUCH CONTROLS (HIDDEN ON DESKTOP, VISIBLE ONLY ON TOUCH / MOBILE < 820PX)
+   -------------------------------------------------------------------------- */
+
+.hud-bottom-controls,
+#hud-controls-bar,
+.touch-controls {
+  display: none !important;
+}
+
+@media (hover: none) and (pointer: coarse), (max-width: 820px) {
+  .hud-bottom-controls,
+  #hud-controls-bar,
+  .touch-controls {
+    position: fixed;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 15;
+    display: flex !important;
+    align-items: center;
+    gap: 5px;
+    background: transparent;
+    border: none;
+    padding: 0;
+  }
+
+  .ctrl-btn {
+    background: rgba(10, 14, 26, 0.58);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    color: #ffffff;
+    padding: 6px 9px;
+    min-width: 46px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    font-family: var(--font-hud);
+  }
+
+  .ctrl-icon {
+    font-size: 0.92rem;
+    line-height: 1;
+  }
+
+  .ctrl-text {
+    font-size: 0.62rem;
+    font-weight: 700;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   BOTTOM-RIGHT: FRAMELESS GTA ANALOG + DIGITAL SPEEDOMETER (145PX DIAMETER)
+   -------------------------------------------------------------------------- */
+
+.hud-bottom-right {
+  position: fixed;
+  bottom: 16px;
+  right: 18px;
+  z-index: 14;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.speedo-dial-wrapper {
+  position: relative;
+  width: 145px;
+  height: 145px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+#speedo-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Digital Speed Pill (188) at the bottom-left of the speedometer gauge */
+.speedo-digital-pill {
+  position: absolute;
+  bottom: 16px;
+  left: 14px;
+  background: rgba(12, 16, 26, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  padding: 1px 7px;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.85);
+}
+
+.speedo-kmh-value {
+  font-family: var(--font-hud);
+  font-size: 1.12rem;
+  font-weight: 700;
+  line-height: 1.05;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+}
+
+/* ==========================================================================
+   MODALS: START MENU, CUTSCENE PLAYER, GAME OVER & SUPABASE CONFIG
+   ========================================================================== */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: radial-gradient(circle at 50% 30%, rgba(25, 10, 52, 0.84) 0%, rgba(5, 3, 14, 0.94) 100%);
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.modal-backdrop.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* --------------------------------------------------------------------------
+   START MENU SHELL (3-Column Vice City Showcase)
+   -------------------------------------------------------------------------- */
+
+.start-menu-shell {
+  width: min(1260px, 100%);
+  max-height: 92vh;
+  overflow-y: auto;
+  background: linear-gradient(145deg, rgba(16, 9, 36, 0.96) 0%, rgba(8, 5, 20, 0.98) 100%);
+  border: 1px solid rgba(255, 42, 133, 0.45);
+  border-radius: 18px;
+  padding: 22px;
+  display: grid;
+  grid-template-columns: 320px 1fr 330px;
+  gap: 22px;
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.85),
+    0 0 45px rgba(255, 42, 133, 0.22);
+}
+
+/* Left Column: Rafa GTA Poster Card */
+.poster-showcase-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.poster-frame {
+  position: relative;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 2px solid var(--star-gold);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.75);
+  aspect-ratio: 4 / 5;
+  background: #0d071c;
+}
+
+.poster-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.poster-overlay-badge {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  background: rgba(8, 5, 20, 0.82);
+  backdrop-filter: blur(6px);
+  border-radius: 8px;
+  padding: 5px 10px;
+}
+
+.poster-overlay-badge.top-stars {
+  top: 10px;
+  left: auto;
+  color: var(--star-gold);
+  font-size: 1.05rem;
+  letter-spacing: 3px;
+  border: 1px solid rgba(255, 215, 64, 0.5);
+  text-shadow: 0 0 10px var(--star-gold);
+}
+
+.poster-overlay-badge.bottom-caption {
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  border-left: 3px solid var(--pt13-red);
+}
+
+.caption-tag {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--edtech-cyan);
+}
+
+.poster-specs-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.spec-item {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+}
+
+.spec-lbl {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}
+
+.spec-val {
+  font-size: 0.82rem;
+  color: #fff;
+}
+
+.cash-green { color: var(--gta-cash-bright) !important; }
+.gold-stars { color: var(--star-gold) !important; }
+
+/* Center Column: Main Launch Panel */
+.start-main-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.vice-kicker {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--edtech-cyan);
+  letter-spacing: 2px;
+}
+
+.start-hero-title {
+  font-family: var(--font-display);
+  font-size: 2.75rem;
+  line-height: 1.02;
+  letter-spacing: 1.5px;
+  color: #ffffff;
+  text-shadow: 0 4px 20px rgba(255, 42, 133, 0.45);
+}
+
+.start-hero-title span {
+  background: linear-gradient(90deg, var(--vice-pink) 0%, var(--star-gold) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.start-hero-subtitle {
+  font-size: 1rem;
+  line-height: 1.45;
+  color: #d6def5;
+}
+
+.cash-highlight {
+  color: var(--gta-cash-bright);
+  font-family: var(--font-mono);
+}
+
+.callsign-input-group {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+
+.callsign-input-group label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.callsign-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.callsign-row input {
+  flex: 1;
+  background: rgba(15, 12, 34, 0.9);
+  border: 1px solid rgba(0, 240, 255, 0.4);
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: #ffffff;
+  font-family: var(--font-hud);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.callsign-row input:focus {
+  border-color: var(--vice-pink);
+  box-shadow: 0 0 14px rgba(255, 42, 133, 0.4);
+}
+
+.vehicle-badge {
+  background: linear-gradient(135deg, var(--pt13-red), #9b0018);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+}
+
+/* GTA Buttons */
+.start-cta-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.start-secondary-btns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.btn-gta-primary {
+  background: linear-gradient(90deg, var(--vice-pink) 0%, #ff5e3a 100%);
+  border: none;
+  border-radius: 10px;
+  padding: 14px 20px;
+  color: #ffffff;
+  font-family: var(--font-hud);
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  box-shadow: 0 8px 25px rgba(255, 42, 133, 0.45);
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.btn-gta-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(255, 42, 133, 0.7);
+}
+
+.btn-gta-secondary {
+  background: linear-gradient(90deg, rgba(0, 240, 255, 0.2) 0%, rgba(41, 121, 255, 0.25) 100%);
+  border: 1px solid var(--edtech-cyan);
+  border-radius: 10px;
+  padding: 11px 14px;
+  color: #ffffff;
+  font-family: var(--font-hud);
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.btn-gta-secondary:hover {
+  background: rgba(0, 240, 255, 0.35);
+  box-shadow: 0 0 18px rgba(0, 240, 255, 0.4);
+}
+
+.btn-gta-outline {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 10px;
+  padding: 11px 14px;
+  color: var(--text-main);
+  font-family: var(--font-hud);
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.btn-gta-outline:hover {
+  border-color: var(--star-gold);
+  color: var(--star-gold);
+}
+
+.btn-sm {
+  padding: 8px 14px;
+  font-size: 0.86rem;
+}
+
+.controls-guide-box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.guide-title {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--star-gold);
+  margin-bottom: 6px;
+}
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+
+kbd {
+  background: rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(0, 240, 255, 0.4);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--edtech-cyan);
+}
+
+/* Right Column: Live Leaderboard Panel */
+.start-leaderboard-panel {
+  background: rgba(7, 4, 18, 0.75);
+  border: 1px solid rgba(0, 240, 255, 0.28);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lb-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.lb-kicker {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--edtech-cyan);
+  letter-spacing: 1px;
+}
+
+.lb-title {
+  font-family: var(--font-hud);
+  font-size: 1.25rem;
+  color: #ffffff;
+}
+
+.lb-refresh-btn {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+  color: #fff;
+}
+
+.lb-server-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: #d9faff;
+}
+
+.leaderboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 370px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.leaderboard-list.compact {
+  max-height: 185px;
+}
+
+.lb-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+
+.lb-row.top-1 {
+  background: linear-gradient(90deg, rgba(255, 215, 64, 0.18) 0%, rgba(255, 42, 133, 0.14) 100%);
+  border-color: rgba(255, 215, 64, 0.55);
+}
+
+.lb-rank {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--star-gold);
+  text-align: center;
+}
+
+.lb-player-info {
+  min-width: 0;
+}
+
+.lb-player-name {
+  font-family: var(--font-hud);
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lb-player-meta {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+
+.lb-bounty {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--gta-cash-bright);
+  text-align: right;
+}
+
+/* --------------------------------------------------------------------------
+   CUTSCENE MODAL PLAYER (./assets/rafa-chase.mp4)
+   -------------------------------------------------------------------------- */
+
+.cutscene-modal-card {
+  width: min(980px, 100%);
+  background: var(--bg-panel-heavy);
+  border: 2px solid var(--edtech-cyan);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.9);
+}
+
+.cutscene-top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 18px;
+  background: rgba(0, 0, 0, 0.75);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.cutscene-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--edtech-cyan);
+}
+
+.cutscene-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-modal-close {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #fff;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.btn-modal-close:hover {
+  background: var(--police-red);
+}
+
+.cutscene-video-container {
+  width: 100%;
+  max-height: 70vh;
+  background: #000;
+  display: flex;
+  justify-content: center;
+}
+
+.cutscene-video {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
+.cutscene-transcript-bar {
+  padding: 10px 18px;
+  background: rgba(16, 10, 34, 0.95);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.88rem;
+  color: #f1f5f9;
+}
+
+.transcript-tag {
+  font-family: var(--font-mono);
+  color: var(--star-gold);
+  margin-right: 6px;
+}
+
+/* --------------------------------------------------------------------------
+   GAME OVER (BUSTED / CERCO FECHADO) MODAL
+   -------------------------------------------------------------------------- */
+
+.gameover-card {
+  width: min(740px, 100%);
+  background: linear-gradient(160deg, rgba(18, 6, 28, 0.96) 0%, rgba(7, 5, 18, 0.98) 100%);
+  border: 2px solid var(--police-red);
+  border-radius: 18px;
+  padding: 24px;
+  text-align: center;
+  box-shadow:
+    0 0 60px rgba(255, 23, 68, 0.45),
+    0 20px 60px rgba(0, 0, 0, 0.9);
+}
+
+.police-tape-banner {
+  background: repeating-linear-gradient(
+    -45deg,
+    #ffd740,
+    #ffd740 14px,
+    #111111 14px,
+    #111111 28px
+  );
+  color: #000;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.78rem;
+  padding: 5px 12px;
+  border-radius: 6px;
+  letter-spacing: 1px;
+  margin-bottom: 14px;
+  background: var(--star-gold);
+}
+
+.gameover-stamp {
+  font-family: var(--font-display);
+  font-size: 3.4rem;
+  letter-spacing: 3px;
+  color: var(--police-red);
+  -webkit-text-stroke: 1.5px #000;
+  text-shadow: 0 0 28px rgba(255, 23, 68, 0.8);
+  line-height: 1;
+}
+
+.gameover-reason {
+  font-size: 1rem;
+  color: #cbd5e1;
+  margin: 6px 0 16px;
+}
+
+.gameover-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.go-stat-box {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+.go-stat-box.highlight-cash {
+  border-color: rgba(85, 184, 72, 0.55);
+  background: rgba(85, 184, 72, 0.1);
+}
+
+.go-stat-label {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+
+.go-stat-value {
+  font-family: var(--font-hud);
+  font-size: 1.35rem;
+  color: #ffffff;
+}
+
+.go-stat-box.highlight-cash .go-stat-value {
+  color: var(--gta-cash-bright);
+}
+
+.gameover-leaderboard-box {
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 16px;
+  text-align: left;
+}
+
+.go-lb-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--edtech-cyan);
+  margin-bottom: 8px;
+}
+
+.go-sync-badge {
+  color: var(--gta-cash-bright);
+}
+
+.gameover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+/* --------------------------------------------------------------------------
+   SUPABASE CONFIGURATION MODAL
+   -------------------------------------------------------------------------- */
+
+.config-modal-card {
+  width: min(540px, 100%);
+  background: var(--bg-panel-heavy);
+  border: 1px solid var(--edtech-cyan);
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.9);
+}
+
+.config-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.config-desc {
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #cbd5e1;
+  margin-bottom: 14px;
+}
+
+.config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.config-form label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--edtech-cyan);
+}
+
+.config-form input {
+  background: rgba(12, 10, 28, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.config-status-msg {
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: #e0f7fa;
+}
+
+.config-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/* ==========================================================================
+   RESPONSIVE BREAKPOINTS (TABLET & MOBILE TOUCH LAYOUT)
+   ========================================================================== */
+
+@media (max-width: 1120px) {
+  .start-menu-shell {
+    grid-template-columns: 1fr;
+    max-width: 680px;
+  }
+
+  .poster-showcase-card {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    align-items: center;
+  }
+
+  .helicam-pip {
+    width: 190px;
+    top: 115px;
+    right: 12px;
+  }
+}
+
+@media (max-width: 820px) {
+  .hud-top-left {
+    top: 8px;
+    left: 10px;
+  }
+
+  .hud-top-right {
+    top: 8px;
+    right: 10px;
+  }
+
+  .wanted-star {
+    font-size: 1.25rem;
+  }
+
+  .gta-cash-display {
+    font-size: 1.65rem;
+  }
+
+  .vitals-bars {
+    width: 96px;
+  }
+
+  .hud-bottom-left {
+    bottom: 62px;
+    left: 10px;
+  }
+
+  .hud-bottom-right {
+    bottom: 62px;
+    right: 10px;
+  }
+
+  .radar-outer-ring {
+    width: 120px;
+    height: 120px;
+  }
+
+  .speedo-dial-wrapper {
+    width: 118px;
+    height: 118px;
+  }
+
+  .radio-subtitle-overlay {
+    bottom: 66px;
+    max-width: 86vw;
+  }
+
+  .radio-subtitle-text {
+    font-size: 0.88rem;
+  }
+
+  .poster-showcase-card {
+    grid-template-columns: 1fr;
+  }
+
+  .gameover-stats-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
