@@ -56,13 +56,39 @@
       this._tapSteerTimer = 0;
       this._driftSparkAccum = 0;
 
-      // Spawner timers
+      // Spawner timers & zero-GC reusable scratch pools
       this._spawnTimer = 0;
       this._pickupTimer = 0;
       this._blockadeTimer = 0;
       this._radioCooldown = 0;
+      this._fxPos = { x: 0, y: 0, z: 0 };
+      this._lanePool = [0, 1, 2, 3];
+      this._lastAmmo = -1;
+      this._lastAmmoClip = -1;
+      this._boundLoop = this._loop.bind(this);
 
       this.state = this._createInitialState('MENU');
+    }
+
+    /**
+     * Reuses a scratch position object for particle FX calls (zero per-frame allocations).
+     */
+    _triggerPos(x, y, z) {
+      this._fxPos.x = x;
+      this._fxPos.y = y;
+      this._fxPos.z = z;
+      return this._fxPos;
+    }
+
+    /**
+     * O(1) in-place swap-pop removal for backward-iterated entity arrays.
+     */
+    _swapPopAt(arr, index) {
+      const lastIdx = arr.length - 1;
+      if (index !== lastIdx) {
+        arr[index] = arr[lastIdx];
+      }
+      arr.pop();
     }
 
     /**
@@ -236,7 +262,11 @@
       s.score = Math.floor(s.runScore);
       s.distanceM = Math.floor(s.distance);
       s.speedRatio = Math.min(1, Math.max(0, s.speed / 300));
-      s.ammoDisplay = `${s.ammo}-${s.ammoClip}`;
+      if (this._lastAmmo !== s.ammo || this._lastAmmoClip !== s.ammoClip) {
+        this._lastAmmo = s.ammo;
+        this._lastAmmoClip = s.ammoClip;
+        s.ammoDisplay = `${s.ammo}-${s.ammoClip}`;
+      }
       s.roadCurvature = s.roadCurve;
       s.roadBank = -s.roadCurve * 0.06;
 
@@ -362,7 +392,7 @@
       }
 
       this._lastFrameTime = performance.now();
-      this._rafId = requestAnimationFrame((ts) => this._loop(ts));
+      this._rafId = requestAnimationFrame(this._boundLoop);
       return this;
     }
 
@@ -535,6 +565,14 @@
         this._analogSteerInput = 0;
       });
 
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) {
+            this._lastFrameTime = performance.now();
+          }
+        });
+      }
+
       // Continuous pointer-hold support on mobile steering buttons (#btn-ctrl-left / #btn-ctrl-right / #btn-ctrl-drift)
       if (typeof document !== 'undefined') {
         const bindHoldBtn = (id, keyProp) => {
@@ -638,6 +676,8 @@
       this._analogSteerInput = 0;
       this._tapSteerTimer = 0;
 
+      this._lastAmmo = -1;
+      this._lastAmmoClip = -1;
       this.state = this._createInitialState('PLAYING', resolvedName);
       this.state.invulnerableTimer = 1.5;
 
@@ -672,6 +712,7 @@
       }
 
       if (window.GT6UI) {
+        window.GT6UI.hidePauseModal?.();
         window.GT6UI.showCinematicToast?.('FUGA INICIADA!', 'EDTECH PT-13 • VICE CITY NIGHT RUN');
         window.GT6UI.updateHUD?.(this.state);
       }
@@ -686,7 +727,7 @@
 
       if (!this._rafId) {
         this._lastFrameTime = performance.now();
-        this._rafId = requestAnimationFrame((ts) => this._loop(ts));
+        this._rafId = requestAnimationFrame(this._boundLoop);
       }
 
       return this.state;
@@ -696,6 +737,7 @@
       if (this.state.mode !== 'PLAYING') return;
       this.state.mode = 'PAUSED';
       window.GT6Audio?.stopEngine?.();
+      window.GT6UI?.showPauseModal?.();
       window.GT6UI?.updateHUD?.(this.state);
     }
 
@@ -705,7 +747,26 @@
       this._lastFrameTime = performance.now();
       window.GT6Audio?.startEngine?.();
       window.GT6Audio?.setWantedLevel?.(this.state.wantedStars);
+      window.GT6UI?.hidePauseModal?.();
       window.GT6UI?.updateHUD?.(this.state);
+    }
+
+    returnToMenu() {
+      this._keysDown = {};
+      this.keys.left = false;
+      this.keys.right = false;
+      this.keys.up = false;
+      this.keys.down = false;
+      this.keys.drift = false;
+      this.keys.boost = false;
+      this._analogSteerInput = 0;
+      this._tapSteerTimer = 0;
+      window.GT6Audio?.stopEngine?.();
+      window.GT6UI?.hidePauseModal?.();
+      window.GT6UI?.hideGameOver?.();
+      this.state = this._createInitialState('MENU', this.state.playerName);
+      this._syncAliases();
+      return this.state;
     }
 
     togglePause() {
@@ -746,7 +807,7 @@
         s.isDrifting = true;
         s.driftTimer = Math.max(s.driftTimer, 0.22);
         s.driftAngle = 0.20;
-        window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: Math.max(0.08, s.y), z: 0.45 });
+        window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, Math.max(0.08, s.y), 0.45));
       }
 
       this._syncAliases();
@@ -778,7 +839,7 @@
         s.isDrifting = true;
         s.driftTimer = Math.max(s.driftTimer, 0.22);
         s.driftAngle = -0.20;
-        window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: Math.max(0.08, s.y), z: 0.45 });
+        window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, Math.max(0.08, s.y), 0.45));
       }
 
       this._syncAliases();
@@ -799,7 +860,7 @@
         s.pitch = 0.26; // Realistic front-wheel wheelie lift
 
         window.GT6Audio?.playSfx?.('jump');
-        window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: 0.08, z: 0.5 });
+        window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, 0.08, 0.5));
         return true;
       }
       return false;
@@ -828,7 +889,7 @@
         s.steerAngle = slideDir * 0.22; // Counter-steering handlebars into the slide
         s.nitro = Math.min(100, s.nitro + 6);
 
-        window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: Math.max(0.08, s.y), z: 0.45 });
+        window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, Math.max(0.08, s.y), 0.45));
         return true;
       } else {
         s.isDrifting = false;
@@ -855,7 +916,7 @@
       s.cameraShake = Math.max(s.cameraShake, 0.35);
 
       window.GT6Audio?.playSfx?.('nitro');
-      window.GT6Renderer?.triggerEffect?.('nitro', { x: s.x, y: s.y + 0.4, z: 1.0 });
+      window.GT6Renderer?.triggerEffect?.('nitro', this._triggerPos(s.x, s.y + 0.4, 1.0));
       window.GT6UI?.showCinematicToast?.('TURBO EDTECH PT-13!', '300 KM/H • IMPACTO BLINDADO ATIVO');
       return true;
     }
@@ -990,17 +1051,29 @@
     // MAIN GAME LOOP & PHYSICS STEP
     // =========================================================================
 
-    _loop(timestamp) {
-      const rawDt = Math.min(0.05, Math.max(0.001, (timestamp - this._lastFrameTime) / 1000));
-      this._lastFrameTime = timestamp;
-
+    /**
+     * Advances simulation state by `rawDt` seconds (clamped <= 0.05s to prevent frame-spike teleports).
+     */
+    update(rawDt = 0.016) {
+      const dt = Math.min(Math.max(Number(rawDt) || 0.016, 0.001), 0.05);
       if (this.state.mode === 'PLAYING') {
-        this._updatePlaying(rawDt);
+        this._updatePlaying(dt);
       } else if (this.state.mode === 'MENU') {
-        this._updateMenuPreview(rawDt);
+        this._updateMenuPreview(dt);
       }
-
       this._syncAliases();
+      return this.state;
+    }
+
+    _loop(timestamp) {
+      const now = typeof timestamp === 'number' && Number.isFinite(timestamp)
+        ? timestamp
+        : performance.now();
+      const deltaSec = this._lastFrameTime > 0 ? (now - this._lastFrameTime) / 1000 : 0.016;
+      const rawDt = Math.min(Math.max(Number.isFinite(deltaSec) ? deltaSec : 0.016, 0.001), 0.05);
+      this._lastFrameTime = now;
+
+      this.update(rawDt);
 
       // Render 3D scene
       if (window.GT6Renderer && typeof window.GT6Renderer.renderFrame === 'function') {
@@ -1020,7 +1093,7 @@
         }
       }
 
-      this._rafId = requestAnimationFrame((ts) => this._loop(ts));
+      this._rafId = requestAnimationFrame(this._boundLoop);
     }
 
     /**
@@ -1200,12 +1273,12 @@
         s.x = -ROAD_HALF_WIDTH;
         if (s.vx < 0) s.vx = Math.max(2.8, -s.vx * 0.45);
         s.targetX = Math.max(-ROAD_SOFT_BOUND, s.targetX);
-        window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: 0.1, z: 0.2 });
+        window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, 0.1, 0.2));
       } else if (s.x >= ROAD_HALF_WIDTH) {
         s.x = ROAD_HALF_WIDTH;
         if (s.vx > 0) s.vx = Math.min(-2.8, -s.vx * 0.45);
         s.targetX = Math.min(ROAD_SOFT_BOUND, s.targetX);
-        window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: 0.1, z: 0.2 });
+        window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, 0.1, 0.2));
       }
 
       // Dynamically compute `state.laneIndex` from `state.x`
@@ -1240,7 +1313,7 @@
         this._driftSparkAccum += rawDt;
         if (this._driftSparkAccum >= 0.075) {
           this._driftSparkAccum = 0;
-          window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: 0.08, z: 0.55 });
+          window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, 0.08, 0.55));
         }
       } else {
         this._driftSparkAccum = 0;
@@ -1279,7 +1352,7 @@
           }
 
           // Landing sparks!
-          window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: 0.08, z: 0 });
+          window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, 0.08, 0));
         }
       } else {
         const targetPitch = s.isBoosting ? 0.16 : 0;
@@ -1518,8 +1591,8 @@
       const maxOccupied = s.wantedStars >= 4 ? 3 : (s.wantedStars >= 2 ? 2 : 1);
       const count = 1 + Math.floor(Math.random() * maxOccupied);
 
-      const availableLanes = [0, 1, 2, 3];
-      // Shuffle lanes
+      const availableLanes = this._lanePool;
+      // In-place Fisher-Yates shuffle (zero array allocations)
       for (let i = availableLanes.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         const tmp = availableLanes[i];
@@ -1670,10 +1743,11 @@
 
     _updateRamps(dt) {
       const s = this.state;
-      for (let i = s.ramps.length - 1; i >= 0; i--) {
-        const ramp = s.ramps[i];
+      const ramps = s.ramps;
+      for (let i = ramps.length - 1; i >= 0; i--) {
+        const ramp = ramps[i];
         if (!ramp.active) {
-          s.ramps.splice(i, 1);
+          this._swapPopAt(ramps, i);
           continue;
         }
 
@@ -1686,7 +1760,7 @@
         }
 
         if (ramp.z > 28) {
-          s.ramps.splice(i, 1);
+          this._swapPopAt(ramps, i);
         }
       }
     }
@@ -1731,10 +1805,11 @@
 
     _updatePickups(dt) {
       const s = this.state;
-      for (let i = s.pickups.length - 1; i >= 0; i--) {
-        const p = s.pickups[i];
+      const pickups = s.pickups;
+      for (let i = pickups.length - 1; i >= 0; i--) {
+        const p = pickups[i];
         if (!p.active) {
-          s.pickups.splice(i, 1);
+          this._swapPopAt(pickups, i);
           continue;
         }
 
@@ -1748,19 +1823,19 @@
         if (dz <= 2.6 && dx <= 1.75 && dy <= 2.4) {
           p.active = false;
           this._collectPickup(p);
-          s.pickups.splice(i, 1);
+          this._swapPopAt(pickups, i);
           continue;
         }
 
         if (p.z > 25) {
-          s.pickups.splice(i, 1);
+          this._swapPopAt(pickups, i);
         }
       }
     }
 
     _collectPickup(p) {
       const s = this.state;
-      const pos = { x: p.x, y: p.y || 0.6, z: 0 };
+      const pos = this._triggerPos(p.x, p.y || 0.6, 0);
 
       switch (p.type) {
         case 'cash': {
@@ -1800,11 +1875,12 @@
 
     _updateObstacles(dt) {
       const s = this.state;
+      const obstacles = s.obstacles;
 
-      for (let i = s.obstacles.length - 1; i >= 0; i--) {
-        const obs = s.obstacles[i];
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
         if (!obs.active) {
-          s.obstacles.splice(i, 1);
+          this._swapPopAt(obstacles, i);
           continue;
         }
 
@@ -1854,7 +1930,7 @@
         }
 
         if (obs.z > 28) {
-          s.obstacles.splice(i, 1);
+          this._swapPopAt(obstacles, i);
         }
       }
     }
@@ -1883,8 +1959,8 @@
         this._awardCashAndScore(2000, 2000 * s.combo);
 
         window.GT6Audio?.playSfx?.('roadblock');
-        window.GT6Renderer?.triggerEffect?.('explosion', { x: obs.x, y: 0.8, z: obs.z });
-        window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: 0.4, z: 0 });
+        window.GT6Renderer?.triggerEffect?.('explosion', this._triggerPos(obs.x, 0.8, obs.z));
+        window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, 0.4, 0));
         window.GT6UI?.showCinematicToast?.('IMPACTO TURBO EDTECH! +$2.000', 'VIATURA DESTRUÍDA NO IMPACTO');
         return;
       }
@@ -1929,8 +2005,8 @@
       s.cameraShake = 0.75;
 
       window.GT6Audio?.playSfx?.('crash');
-      window.GT6Renderer?.triggerEffect?.('explosion', { x: obs.x, y: 0.7, z: obs.z });
-      window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: 0.35, z: 0 });
+      window.GT6Renderer?.triggerEffect?.('explosion', this._triggerPos(obs.x, 0.7, obs.z));
+      window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, 0.35, 0));
 
       this._applyDamage(rawDamage, obs.type);
     }
@@ -1964,7 +2040,7 @@
       const bonus = 350 * s.combo;
       this._awardCashAndScore(350, bonus);
 
-      window.GT6Renderer?.triggerEffect?.('sparks', { x: s.x, y: 0.3, z: 0 });
+      window.GT6Renderer?.triggerEffect?.('sparks', this._triggerPos(s.x, 0.3, 0));
     }
 
     // =========================================================================

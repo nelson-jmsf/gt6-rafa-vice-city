@@ -7,25 +7,25 @@
   'use strict';
 
   const CAMERA_MODES = ['chase', 'front_cinematic', 'low_action', 'helicam_top', 'cinematic_jump'];
-  const GFX_PRESETS = ['ULTRA', 'HIGH', 'PERFORMANCE'];
+  const GFX_PRESETS = ['HIGH', 'ULTRA', 'PERFORMANCE'];
   const GFX_META = {
-    ULTRA: {
-      buttonHtml: '✨ <span id="lbl-gfx-quality" class="sr-only">3D ULTRA HD</span>',
-      label: '3D ULTRA HD',
-      toastTitle: '✨ 3D ULTRA HD ATIVADO',
-      toastSub: 'HDR NEON BLOOM • REFLEXOS NO ASFALTO • MODELOS 3D REALISTAS'
-    },
     HIGH: {
-      buttonHtml: '✨ <span id="lbl-gfx-quality" class="sr-only">3D HIGH</span>',
-      label: '3D HIGH',
-      toastTitle: '✨ 3D HIGH ATIVADO',
-      toastSub: 'SOMBRAS DINÂMICAS • NEON BLOOM • ILUMINAÇÃO PBR VICE CITY'
+      buttonHtml: '⚡ <span id="lbl-gfx-quality" class="sr-only">⚡ 60FPS HD</span>',
+      label: '⚡ 60FPS HD',
+      toastTitle: '⚡ 60FPS HD ATIVADO',
+      toastSub: 'RENDERIZAÇÃO DIRETA • REFLEXOS NO ASFALTO • FLUIDEZ MÁXIMA'
+    },
+    ULTRA: {
+      buttonHtml: '✨ <span id="lbl-gfx-quality" class="sr-only">✨ ULTRA BLOOM</span>',
+      label: '✨ ULTRA BLOOM',
+      toastTitle: '✨ ULTRA BLOOM ATIVADO',
+      toastSub: 'HDR NEON BLOOM • CORES CINEMATOGRÁFICAS VICE CITY'
     },
     PERFORMANCE: {
-      buttonHtml: '⚡ <span id="lbl-gfx-quality" class="sr-only">3D 60FPS</span>',
-      label: '3D 60FPS',
-      toastTitle: '⚡ MODO 3D 60FPS ATIVADO',
-      toastSub: 'RENDERIZAÇÃO DIRETA OTIMIZADA PARA MÁXIMA FLUIDEZ'
+      buttonHtml: '🚀 <span id="lbl-gfx-quality" class="sr-only">🚀 ULTRA LEVE</span>',
+      label: '🚀 ULTRA LEVE',
+      toastTitle: '🚀 ULTRA LEVE ATIVADO',
+      toastSub: 'MODO DESEMPENHO MÁXIMO • ZERO SOMBRAS E ZERO BLUR'
     }
   };
   const STREET_NAMES = [
@@ -41,7 +41,7 @@
     _initialized: false,
     _cameraModeIdx: 0,
     _gfxQualityIdx: 0,
-    _gfxQuality: 'ULTRA',
+    _gfxQuality: 'HIGH',
     _lastCashValue: 1956791,
     _cashBumpTimeout: null,
     _cashDeltaTimeout: null,
@@ -50,6 +50,42 @@
     _helicamHighlightTimeout: null,
     _helicamVisible: false,
     _elements: {},
+    _starNodes: [],
+    _speedoCtx: null,
+    _radarCtx: null,
+    _speedoBackdropCanvas: null,
+    _speedoBackdropW: 0,
+    _speedoBackdropH: 0,
+    _radarBgGrad: null,
+    _radarBgW: 0,
+    _radarBgH: 0,
+
+    // Cached HUD values to eliminate DOM layout thrashing & 60fps Canvas2D redraws
+    _lastCanvasDrawTime: -50,
+    _lastCashStr: null,
+    _lastSpeedStr: null,
+    _lastDistStr: null,
+    _lastStars: -1,
+    _lastHealthPct: null,
+    _lastArmorPct: null,
+    _lastNitroPct: null,
+    _lastHealthVal: -1,
+    _lastArmorVal: -1,
+    _lastNitroVal: -1,
+    _lastPlayerName: null,
+    _lastScoreVal: -1,
+    _lastRoadblocks: -1,
+    _lastComboStr: null,
+    _lastComboHot: null,
+    _lastAmmoMain: -1,
+    _lastAmmoClip: -1,
+    _lastGearStr: null,
+    _lastHelicamLockStr: null,
+    _lastLocationIdx: -1,
+    _lastFxDamage: null,
+    _lastFxJump: null,
+    _lastFxNitro: null,
+    _lastFxPursuit: null,
 
     /**
      * Initializes DOM bindings, canvas contexts, video players, and interactive buttons.
@@ -63,6 +99,7 @@
       this._cacheElements();
       this._bindEvents();
       this._initHeliCamVideo();
+      this.setGraphicsQuality('HIGH', true, true);
 
       // Render default initial state onto HUD, Speedometer (188 km/h showcase) & Radar
       this.drawSpeedometer(188, false, 100);
@@ -227,6 +264,13 @@
         btnGameoverVideo: byId('btn-gameover-video'),
         btnGameoverMenu: byId('btn-gameover-menu'),
 
+        // Pause Modal (Minimalist Pause Menu)
+        pauseModal: byId('pause-modal'),
+        btnPauseResume: byId('btn-pause-resume'),
+        btnPauseMute: byId('btn-pause-mute'),
+        btnPauseRestart: byId('btn-pause-restart'),
+        btnPauseMenu: byId('btn-pause-menu'),
+
         // Supabase Config Modal
         supabaseConfigModal: byId('supabase-config-modal'),
         inputSupabaseUrl: byId('input-supabase-url'),
@@ -236,6 +280,16 @@
         btnSaveSupabase: byId('btn-save-supabase'),
         btnClearSupabase: byId('btn-clear-supabase')
       };
+
+      this._starNodes = this._elements.wantedStarsRow
+        ? Array.from(this._elements.wantedStarsRow.querySelectorAll('.wanted-star'))
+        : [];
+      this._speedoCtx = this._elements.speedoCanvas && typeof this._elements.speedoCanvas.getContext === 'function'
+        ? this._elements.speedoCanvas.getContext('2d')
+        : null;
+      this._radarCtx = this._elements.radarCanvas && typeof this._elements.radarCanvas.getContext === 'function'
+        ? this._elements.radarCanvas.getContext('2d')
+        : null;
     },
 
     _bindEvents() {
@@ -279,6 +333,7 @@
       if (el.btnToggleHelicam) {
         el.btnToggleHelicam.addEventListener('click', () => {
           this._helicamVisible = !this._helicamVisible;
+          if (this._helicamVisible) this._lastHelicamLockStr = null;
           el.helicamPip?.classList.toggle('hidden-pip', !this._helicamVisible);
           el.btnToggleHelicam.classList.toggle('active', this._helicamVisible);
           if (this._helicamVisible && el.helicamVideo) {
@@ -314,19 +369,50 @@
         el.btnToggleMute.addEventListener('click', () => this.toggleAudioMute());
       }
 
-      // Pause Toggle
+      // Pause Toggle & Pause Modal Actions
       if (el.btnPauseGame) {
         el.btnPauseGame.addEventListener('click', () => {
           if (!window.GT6Game) return;
           if (window.GT6Game.state?.mode === 'PAUSED') {
             window.GT6Game.resumeGame?.();
+            this.hidePauseModal();
             if (el.lblPauseState) el.lblPauseState.textContent = 'PAUSA';
-            this.showCinematicToast('FUGA RETOMADA', 'ACELERAÇÃO MÁXIMA NA AVENIDA');
           } else if (window.GT6Game.state?.mode === 'PLAYING') {
             window.GT6Game.pauseGame?.();
+            this.showPauseModal();
             if (el.lblPauseState) el.lblPauseState.textContent = 'RETOMAR';
-            this.showCinematicToast('JOGO PAUSADO', 'PRESSIONE P OU CLIQUE EM RETOMAR');
           }
+        });
+      }
+
+      if (el.btnPauseResume) {
+        el.btnPauseResume.addEventListener('click', () => {
+          this.hidePauseModal();
+          window.GT6Game?.resumeGame?.();
+        });
+      }
+
+      if (el.btnPauseMute) {
+        el.btnPauseMute.addEventListener('click', () => {
+          this.toggleAudioMute();
+        });
+      }
+
+      if (el.btnPauseRestart) {
+        el.btnPauseRestart.addEventListener('click', () => {
+          this.hidePauseModal();
+          this.hideGameOver();
+          window.GT6Game?.restartGame?.();
+        });
+      }
+
+      if (el.btnPauseMenu) {
+        el.btnPauseMenu.addEventListener('click', () => {
+          this.hidePauseModal();
+          this.hideGameOver();
+          window.GT6Game?.returnToMenu?.();
+          if (el.startMenuModal) el.startMenuModal.classList.add('active');
+          this.refreshLeaderboard();
         });
       }
 
@@ -383,6 +469,7 @@
       if (el.btnGameoverMenu) {
         el.btnGameoverMenu.addEventListener('click', () => {
           this.hideGameOver();
+          window.GT6Game?.returnToMenu?.();
           if (el.startMenuModal) el.startMenuModal.classList.add('active');
           this.refreshLeaderboard();
         });
@@ -509,11 +596,11 @@
       return this.setGraphicsQuality(nextPreset, false, true);
     },
 
-    setGraphicsQuality(preset = 'ULTRA', silent = false, skipRendererCall = false) {
-      const raw = String(preset || 'ULTRA').toUpperCase();
-      const normalized = (raw.includes('60') || raw.includes('PERF') || raw === 'LOW')
+    setGraphicsQuality(preset = 'HIGH', silent = false, skipRendererCall = false) {
+      const raw = String(preset || 'HIGH').toUpperCase().trim();
+      const normalized = (raw.includes('PERF') || raw.includes('LEVE') || raw === 'LOW' || raw === 'FAST' || raw === '3D 60FPS')
         ? 'PERFORMANCE'
-        : (raw.includes('HIGH') ? 'HIGH' : 'ULTRA');
+        : ((raw.includes('ULTRA') || raw.includes('BLOOM')) ? 'ULTRA' : 'HIGH');
 
       this._gfxQuality = normalized;
       const idx = GFX_PRESETS.indexOf(normalized);
@@ -525,11 +612,13 @@
         window.GT6Renderer?.setQuality?.(normalized);
       }
 
-      const meta = GFX_META[normalized] || GFX_META.ULTRA;
+      const meta = GFX_META[normalized] || GFX_META.HIGH;
       const btn = this._elements.btnGfxQuality || document.getElementById('btn-gfx-quality');
       if (btn) {
         btn.innerHTML = meta.buttonHtml;
         btn.dataset.quality = normalized;
+        btn.title = `Qualidade Gráfica 3D [G]: ${meta.label}`;
+        btn.setAttribute('aria-label', meta.label);
         btn.classList.toggle('active', normalized === 'ULTRA' || normalized === 'HIGH');
         this._elements.btnGfxQuality = btn;
         this._elements.lblGfxQuality = document.getElementById('lbl-gfx-quality');
@@ -547,6 +636,25 @@
       const muted = window.GT6Audio.toggleMute?.();
       if (this._elements.lblMuteState) {
         this._elements.lblMuteState.textContent = muted ? 'MUDO' : 'SOM ON';
+      }
+      if (this._elements.btnPauseMute) {
+        this._elements.btnPauseMute.textContent = muted ? '🔇 MUDO' : '🔊 SOM';
+      }
+    },
+
+    showPauseModal() {
+      const el = this._elements;
+      if (el.btnPauseMute && window.GT6Audio) {
+        el.btnPauseMute.textContent = window.GT6Audio.isMuted ? '🔇 MUDO' : '🔊 SOM';
+      }
+      if (el.pauseModal) {
+        el.pauseModal.classList.add('active');
+      }
+    },
+
+    hidePauseModal() {
+      if (this._elements.pauseModal) {
+        this._elements.pauseModal.classList.remove('active');
       }
     },
 
@@ -597,73 +705,101 @@
       if (!state) return;
       const el = this._elements;
 
-      // 1. Player Name
-      if (el.playerName && state.playerName) {
-        el.playerName.textContent = state.playerName;
+      // 1. Player Name (only if optional legacy elements exist)
+      if ((el.playerName || el.helicamTargetTag) && state.playerName && state.playerName !== this._lastPlayerName) {
+        this._lastPlayerName = state.playerName;
+        if (el.playerName) el.playerName.textContent = state.playerName;
+        if (el.helicamTargetTag) el.helicamTargetTag.textContent = `ALVO: ${state.playerName}`;
       }
 
       // 2. GTA Cash Counter ($1956898 frameless green text matching the video)
-      const cashVal = Math.floor(
-        state.totalBountyCash ?? state.cash ?? 1956791
-      );
       if (el.cashDisplay) {
-        el.cashDisplay.textContent = `$${cashVal}`;
+        const cashVal = Math.floor(state.totalBountyCash ?? state.cash ?? 1956791);
+        const cashStr = `$${cashVal}`;
+        if (cashStr !== this._lastCashStr) {
+          this._lastCashStr = cashStr;
+          el.cashDisplay.textContent = cashStr;
 
-        const diff = cashVal - this._lastCashValue;
-        if (diff >= 100) {
-          el.cashDisplay.classList.add('cash-bump');
-          clearTimeout(this._cashBumpTimeout);
-          this._cashBumpTimeout = setTimeout(() => {
-            el.cashDisplay?.classList.remove('cash-bump');
-          }, 180);
+          const diff = cashVal - this._lastCashValue;
+          if (diff >= 100) {
+            el.cashDisplay.classList.add('cash-bump');
+            clearTimeout(this._cashBumpTimeout);
+            this._cashBumpTimeout = setTimeout(() => {
+              el.cashDisplay?.classList.remove('cash-bump');
+            }, 180);
 
-          if (diff >= 350 && el.cashDelta) {
-            el.cashDelta.textContent = `+$${diff}`;
-            el.cashDelta.classList.add('visible');
-            clearTimeout(this._cashDeltaTimeout);
-            this._cashDeltaTimeout = setTimeout(() => {
-              el.cashDelta?.classList.remove('visible');
-            }, 950);
+            if (diff >= 350 && el.cashDelta) {
+              el.cashDelta.textContent = `+$${diff}`;
+              el.cashDelta.classList.add('visible');
+              clearTimeout(this._cashDeltaTimeout);
+              this._cashDeltaTimeout = setTimeout(() => {
+                el.cashDelta?.classList.remove('visible');
+              }, 950);
+            }
+          }
+          this._lastCashValue = cashVal;
+        }
+      }
+
+      // 3. Optional Legacy Telemetry Strip (skipped completely when removed from DOM)
+      let distMeters = 0;
+      if (el.distance || el.locationName) {
+        distMeters = Math.floor(state.distance ?? state.distanceM ?? 0);
+        if (el.distance) {
+          const distStr = `${distMeters} m`;
+          if (distStr !== this._lastDistStr) {
+            this._lastDistStr = distStr;
+            el.distance.textContent = distStr;
           }
         }
-        this._lastCashValue = cashVal;
       }
 
-      // 3. Telemetry Strip: Distance, Score, Roadblocks, Combo
-      const distMeters = Math.floor(state.distance ?? state.distanceM ?? 0);
-      if (el.distance) {
-        el.distance.textContent = `${distMeters} m`;
-      }
-
-      const scoreVal = Math.floor(state.score ?? state.runScore ?? 0);
       if (el.score) {
-        el.score.textContent = scoreVal.toLocaleString('pt-BR');
+        const scoreVal = Math.floor(state.score ?? state.runScore ?? 0);
+        if (scoreVal !== this._lastScoreVal) {
+          this._lastScoreVal = scoreVal;
+          el.score.textContent = scoreVal.toLocaleString('pt-BR');
+        }
       }
 
-      const rbVal = Math.floor(state.roadblocksBroken ?? 0);
       if (el.roadblocks) {
-        el.roadblocks.textContent = String(rbVal);
+        const rbVal = Math.floor(state.roadblocksBroken ?? 0);
+        if (rbVal !== this._lastRoadblocks) {
+          this._lastRoadblocks = rbVal;
+          el.roadblocks.textContent = String(rbVal);
+        }
       }
 
-      const comboVal = Number(state.combo || 1);
-      if (el.combo) {
-        el.combo.textContent = `x${comboVal.toFixed(1)}`;
-      }
-      if (el.comboChip) {
-        el.comboChip.classList.toggle('combo-hot', comboVal >= 2);
+      if (el.combo || el.comboChip) {
+        const comboVal = Number(state.combo || 1);
+        if (el.combo) {
+          const comboStr = `x${comboVal.toFixed(1)}`;
+          if (comboStr !== this._lastComboStr) {
+            this._lastComboStr = comboStr;
+            el.combo.textContent = comboStr;
+          }
+        }
+        const isComboHot = comboVal >= 2;
+        if (el.comboChip && isComboHot !== this._lastComboHot) {
+          this._lastComboHot = isComboHot;
+          el.comboChip.classList.toggle('combo-hot', isComboHot);
+        }
       }
 
       // 4. Wanted Stars (1..6)
       const stars = Math.max(1, Math.min(6, Math.round(state.wantedStars ?? state.stars ?? 1)));
-      if (el.wantedStarsRow) {
-        const starNodes = el.wantedStarsRow.querySelectorAll('.wanted-star');
-        starNodes.forEach((node, idx) => {
-          node.classList.toggle('active', idx < stars);
-        });
-        el.wantedStarsRow.classList.toggle('police-chase-alert', stars >= 4);
-      }
-      if (el.radarOuterRing) {
-        el.radarOuterRing.classList.toggle('radar-pursuit-alert', stars >= 4);
+      if (stars !== this._lastStars) {
+        this._lastStars = stars;
+        const starNodes = this._starNodes;
+        for (let i = 0; i < starNodes.length; i++) {
+          starNodes[i].classList.toggle('active', i < stars);
+        }
+        if (el.wantedStarsRow) {
+          el.wantedStarsRow.classList.toggle('police-chase-alert', stars >= 4);
+        }
+        if (el.radarOuterRing) {
+          el.radarOuterRing.classList.toggle('radar-pursuit-alert', stars >= 4);
+        }
       }
 
       // 5. Health, Armor, Nitro & Weapon Ammo (558-30)
@@ -671,79 +807,142 @@
       const armor = Math.max(0, Math.min(100, Math.round(state.armor ?? 100)));
       const nitro = Math.max(0, Math.min(100, Math.round(state.nitro ?? 100)));
 
-      if (el.healthBar) el.healthBar.style.width = `${health}%`;
-      if (el.healthVal) el.healthVal.textContent = String(health);
+      if (el.healthBar) {
+        const healthPct = `${health}%`;
+        if (healthPct !== this._lastHealthPct) {
+          this._lastHealthPct = healthPct;
+          el.healthBar.style.width = healthPct;
+        }
+      }
+      if (el.healthVal && health !== this._lastHealthVal) {
+        this._lastHealthVal = health;
+        el.healthVal.textContent = String(health);
+      }
 
-      if (el.armorBar) el.armorBar.style.width = `${armor}%`;
-      if (el.armorVal) el.armorVal.textContent = String(armor);
+      if (el.armorBar) {
+        const armorPct = `${armor}%`;
+        if (armorPct !== this._lastArmorPct) {
+          this._lastArmorPct = armorPct;
+          el.armorBar.style.width = armorPct;
+        }
+      }
+      if (el.armorVal && armor !== this._lastArmorVal) {
+        this._lastArmorVal = armor;
+        el.armorVal.textContent = String(armor);
+      }
 
-      if (el.nitroBar) el.nitroBar.style.width = `${nitro}%`;
-      if (el.nitroVal) el.nitroVal.textContent = `${nitro}%`;
+      if (el.nitroBar) {
+        const nitroPct = `${nitro}%`;
+        if (nitroPct !== this._lastNitroPct) {
+          this._lastNitroPct = nitroPct;
+          el.nitroBar.style.width = nitroPct;
+        }
+      }
+      if (el.nitroVal && nitro !== this._lastNitroVal) {
+        this._lastNitroVal = nitro;
+        el.nitroVal.textContent = `${nitro}%`;
+      }
 
       const ammoMain = state.ammo ?? 558;
       const ammoClip = state.ammoClip ?? 30;
-      if (el.ammoMain) el.ammoMain.textContent = String(ammoMain);
-      if (el.ammoClip) el.ammoClip.textContent = String(ammoClip);
+      if (el.ammoMain && ammoMain !== this._lastAmmoMain) {
+        this._lastAmmoMain = ammoMain;
+        el.ammoMain.textContent = String(ammoMain);
+      }
+      if (el.ammoClip && ammoClip !== this._lastAmmoClip) {
+        this._lastAmmoClip = ammoClip;
+        el.ammoClip.textContent = String(ammoClip);
+      }
 
       // 6. Speedometer Digital Readout & Gear
       const speedKmh = Math.round(state.speed ?? 188);
       if (el.speedVal) {
-        el.speedVal.textContent = String(speedKmh);
+        const speedStr = String(speedKmh);
+        if (speedStr !== this._lastSpeedStr) {
+          this._lastSpeedStr = speedStr;
+          el.speedVal.textContent = speedStr;
+        }
       }
       if (el.gearTag) {
         const gearNum = Math.min(6, Math.max(1, Math.ceil(speedKmh / 42)));
-        el.gearTag.textContent = state.isBoosting
+        const gearStr = state.isBoosting
           ? 'OVERDRIVE // MAX'
           : `EDTECH // D${gearNum}`;
+        if (gearStr !== this._lastGearStr) {
+          this._lastGearStr = gearStr;
+          el.gearTag.textContent = gearStr;
+        }
       }
 
-      // 7. Heli-Cam Telemetry Lock
-      if (el.helicamSpeedLock) {
-        el.helicamSpeedLock.textContent = `${speedKmh} KM/H • ${stars}★`;
-      }
-      if (el.helicamTargetTag && state.playerName) {
-        el.helicamTargetTag.textContent = `ALVO: ${state.playerName}`;
+      // 7. Heli-Cam Telemetry Lock (only mutate if visible or value changed)
+      if (el.helicamSpeedLock && this._helicamVisible) {
+        const lockStr = `${speedKmh} KM/H • ${stars}★`;
+        if (lockStr !== this._lastHelicamLockStr) {
+          this._lastHelicamLockStr = lockStr;
+          el.helicamSpeedLock.textContent = lockStr;
+        }
       }
 
-      // 8. Screen FX Vignette (Damage, Cinematic Jump, Nitro, or 5-6 Star Pursuit)
+      // 8. Screen FX Vignette (only toggle classes when boolean states change)
       if (el.screenFx) {
-        el.screenFx.classList.toggle('damage-flash-fx', (state.cameraShake || 0) > 0.65);
-        el.screenFx.classList.toggle('cinematic-jump-fx', Boolean(state.isCinematicJump));
-        el.screenFx.classList.toggle('nitro-active-fx', Boolean(state.isBoosting || state.nitroActive));
-        el.screenFx.classList.toggle('police-pursuit-fx', stars >= 5 && state.mode === 'PLAYING');
+        const fxDamage = (state.cameraShake || 0) > 0.65;
+        const fxJump = Boolean(state.isCinematicJump);
+        const fxNitro = Boolean(state.isBoosting || state.nitroActive);
+        const fxPursuit = stars >= 5 && state.mode === 'PLAYING';
+
+        if (fxDamage !== this._lastFxDamage) {
+          this._lastFxDamage = fxDamage;
+          el.screenFx.classList.toggle('damage-flash-fx', fxDamage);
+        }
+        if (fxJump !== this._lastFxJump) {
+          this._lastFxJump = fxJump;
+          el.screenFx.classList.toggle('cinematic-jump-fx', fxJump);
+        }
+        if (fxNitro !== this._lastFxNitro) {
+          this._lastFxNitro = fxNitro;
+          el.screenFx.classList.toggle('nitro-active-fx', fxNitro);
+        }
+        if (fxPursuit !== this._lastFxPursuit) {
+          this._lastFxPursuit = fxPursuit;
+          el.screenFx.classList.toggle('police-pursuit-fx', fxPursuit);
+        }
       }
 
       // 9. GPS Radar Street (preserved for hidden DOM element)
       if (el.locationName) {
         const streetIdx = Math.floor(distMeters / 350) % STREET_NAMES.length;
-        el.locationName.textContent = STREET_NAMES[streetIdx];
+        if (streetIdx !== this._lastLocationIdx) {
+          this._lastLocationIdx = streetIdx;
+          el.locationName.textContent = STREET_NAMES[streetIdx];
+        }
       }
 
-      // 10. Draw Canvas Gauges (Speedometer + Circular GTA Radar Minimap)
-      this.drawSpeedometer(speedKmh, Boolean(state.isBoosting), nitro);
-      this.drawRadar(state);
+      // 10. Throttle Canvas2D Gauges (Speedometer + Circular GTA Radar) to ~20 Hz (50ms interval)
+      const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+      if (now - this._lastCanvasDrawTime >= 50) {
+        this._lastCanvasDrawTime = now;
+        this.drawSpeedometer(speedKmh, Boolean(state.isBoosting), nitro);
+        this.drawRadar(state);
+      }
     },
 
     // =========================================================================
     // FRAMELESS CIRCULAR GTA SPEEDOMETER (0 .. 300 KM/H)
     // =========================================================================
 
-    drawSpeedometer(speedKmh = 188, isBoosting = false, nitroPct = 100) {
-      const canvas = this._elements.speedoCanvas;
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      const w = canvas.width;
-      const h = canvas.height;
+    _paintSpeedoStaticBackdrop(ctx, w, h) {
       const cx = w / 2;
       const cy = h / 2;
       const outerRadius = Math.min(cx, cy) - 4;
       const radius = outerRadius - 8;
+      const startAngle = (135 * Math.PI) / 180;
+      const endAngle = (405 * Math.PI) / 180;
+      const sweep = endAngle - startAngle;
+      const redlineAngle = startAngle + sweep * (240 / 300);
 
-      ctx.clearRect(0, 0, w, h);
-
-      // 1. Dark Translucent Dial Face (Matches Video Bottom-Right Gauge)
+      // 1. Dark Translucent Dial Face
       ctx.beginPath();
       ctx.arc(cx, cy, outerRadius, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(10, 14, 22, 0.66)';
@@ -751,15 +950,6 @@
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
       ctx.stroke();
-
-      // Gauge angles: 135 deg (bottom-left) to 405 deg (bottom-right) -> 270 deg sweep
-      const startAngle = (135 * Math.PI) / 180;
-      const endAngle = (405 * Math.PI) / 180;
-      const sweep = endAngle - startAngle;
-      const clampedSpeed = Math.max(0, Math.min(300, speedKmh));
-      const speedRatio = clampedSpeed / 300;
-      const currentAngle = startAngle + sweep * speedRatio;
-      const redlineAngle = startAngle + sweep * (240 / 300);
 
       // 2. Blue Arc (0 .. 240 km/h) & Red Redline Arc (240 .. 300 km/h)
       ctx.beginPath();
@@ -776,24 +966,7 @@
       ctx.lineCap = 'butt';
       ctx.stroke();
 
-      // Active Blue / Red Progress Arc up to current speed
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, startAngle, Math.min(currentAngle, redlineAngle), false);
-      ctx.strokeStyle = '#18c4ff';
-      ctx.lineWidth = 5;
-      ctx.stroke();
-
-      if (currentAngle > redlineAngle) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, redlineAngle, currentAngle, false);
-        ctx.strokeStyle = '#ff2238';
-        ctx.lineWidth = 5;
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      // 3. Tick Marks & Numbers (0 .. 240 in blue/white, 240 .. 300 in red)
+      // 3. Tick Marks & Numbers
       ctx.font = '700 9px "Rajdhani", "Share Tech Mono", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -828,18 +1001,87 @@
         }
       }
 
-      // 4. Subtle Thin Nitro Arc Integrated into the Bottom Rim
+      // 4. Nitro track background
       const nitroStart = (55 * Math.PI) / 180;
       const nitroEnd = (125 * Math.PI) / 180;
-      const nitroSpan = nitroEnd - nitroStart;
-      const nitroFillEnd = nitroStart + nitroSpan * (Math.max(0, Math.min(100, nitroPct)) / 100);
-
       ctx.beginPath();
       ctx.arc(cx, cy, outerRadius - 3, nitroStart, nitroEnd, false);
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
       ctx.lineWidth = 2.5;
       ctx.lineCap = 'round';
       ctx.stroke();
+    },
+
+    drawSpeedometer(speedKmh = 188, isBoosting = false, nitroPct = 100) {
+      const canvas = this._elements.speedoCanvas;
+      if (!canvas) return;
+      const ctx = this._speedoCtx || (typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null);
+      if (!ctx) return;
+
+      const w = canvas.width;
+      const h = canvas.height;
+      const cx = w / 2;
+      const cy = h / 2;
+      const outerRadius = Math.min(cx, cy) - 4;
+      const radius = outerRadius - 8;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // Draw cached static dial + ticks + numbers (or fallback direct paint in headless mocks)
+      let drewCached = false;
+      if (typeof document !== 'undefined' && typeof ctx.drawImage === 'function') {
+        if (!this._speedoBackdropCanvas || this._speedoBackdropW !== w || this._speedoBackdropH !== h) {
+          const bg = document.createElement('canvas');
+          bg.width = w;
+          bg.height = h;
+          const bctx = typeof bg.getContext === 'function' ? bg.getContext('2d') : null;
+          if (bctx) {
+            this._paintSpeedoStaticBackdrop(bctx, w, h);
+            this._speedoBackdropCanvas = bg;
+            this._speedoBackdropW = w;
+            this._speedoBackdropH = h;
+          }
+        }
+        if (this._speedoBackdropCanvas) {
+          ctx.drawImage(this._speedoBackdropCanvas, 0, 0);
+          drewCached = true;
+        }
+      }
+      if (!drewCached) {
+        this._paintSpeedoStaticBackdrop(ctx, w, h);
+      }
+
+      // Gauge angles: 135 deg to 405 deg -> 270 deg sweep
+      const startAngle = (135 * Math.PI) / 180;
+      const endAngle = (405 * Math.PI) / 180;
+      const sweep = endAngle - startAngle;
+      const clampedSpeed = Math.max(0, Math.min(300, speedKmh));
+      const speedRatio = clampedSpeed / 300;
+      const currentAngle = startAngle + sweep * speedRatio;
+      const redlineAngle = startAngle + sweep * (240 / 300);
+
+      // Active Blue / Red Progress Arc up to current speed
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, startAngle, Math.min(currentAngle, redlineAngle), false);
+      ctx.strokeStyle = '#18c4ff';
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'butt';
+      ctx.stroke();
+
+      if (currentAngle > redlineAngle) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, redlineAngle, currentAngle, false);
+        ctx.strokeStyle = '#ff2238';
+        ctx.lineWidth = 5;
+        ctx.lineCap = 'butt';
+        ctx.stroke();
+      }
+
+      // Subtle Thin Nitro Arc Integrated into the Bottom Rim
+      const nitroStart = (55 * Math.PI) / 180;
+      const nitroEnd = (125 * Math.PI) / 180;
+      const nitroSpan = nitroEnd - nitroStart;
+      const nitroFillEnd = nitroStart + nitroSpan * (Math.max(0, Math.min(100, nitroPct)) / 100);
 
       ctx.beginPath();
       ctx.arc(cx, cy, outerRadius - 3, nitroStart, nitroFillEnd, false);
@@ -848,10 +1090,18 @@
       ctx.lineCap = 'round';
       ctx.stroke();
 
-      // 5. Crisp Red Speedometer Needle
+      // Crisp Red Speedometer Needle (lightweight soft halo instead of expensive shadowBlur)
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(currentAngle);
+
+      ctx.beginPath();
+      ctx.moveTo(-11, -3.5);
+      ctx.lineTo(radius - 7, 0);
+      ctx.lineTo(-11, 3.5);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255, 34, 56, 0.28)';
+      ctx.fill();
 
       ctx.beginPath();
       ctx.moveTo(-11, -2.2);
@@ -859,8 +1109,6 @@
       ctx.lineTo(-11, 2.2);
       ctx.closePath();
       ctx.fillStyle = '#ff2238';
-      ctx.shadowColor = 'rgba(255, 34, 56, 0.75)';
-      ctx.shadowBlur = 6;
       ctx.fill();
 
       // Center Needle Hub
@@ -881,7 +1129,7 @@
     drawRadar(state) {
       const canvas = this._elements.radarCanvas;
       if (!canvas) return;
-      const ctx = canvas.getContext('2d');
+      const ctx = this._radarCtx || (typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null);
       if (!ctx) return;
 
       const w = canvas.width;
@@ -890,6 +1138,9 @@
       const cy = h / 2;
       const radius = Math.min(cx, cy) - 3;
       const playerY = cy + 24;
+      const nowMs = typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
 
       // Dynamic road curvature (-1.0 left to +1.0 right)
       const rawCurve = Number(state.roadCurve ?? state.roadCurvature ?? 0);
@@ -910,11 +1161,16 @@
       ctx.arc(cx, cy, radius - 3, 0, Math.PI * 2);
       ctx.clip();
 
-      // 1. Dark Grey-Navy GTA Street Map Background
-      const bgGrad = ctx.createRadialGradient(cx, cy, 8, cx, cy, radius);
-      bgGrad.addColorStop(0, '#1c2432');
-      bgGrad.addColorStop(1, '#111620');
-      ctx.fillStyle = bgGrad;
+      // 1. Dark Grey-Navy GTA Street Map Background (cached gradient)
+      if (!this._radarBgGrad || this._radarBgW !== w || this._radarBgH !== h) {
+        const bgGrad = ctx.createRadialGradient(cx, cy, 8, cx, cy, radius);
+        bgGrad.addColorStop(0, '#1c2432');
+        bgGrad.addColorStop(1, '#111620');
+        this._radarBgGrad = bgGrad;
+        this._radarBgW = w;
+        this._radarBgH = h;
+      }
+      ctx.fillStyle = this._radarBgGrad;
       ctx.fillRect(0, 0, w, h);
 
       // 2. City Blocks & Cross-Streets
@@ -1013,7 +1269,7 @@
       }
 
       // 7. Oncoming Obstacles & Police Blockades
-      const flashBlue = Math.floor(performance.now() / 160) % 2 === 0;
+      const flashBlue = Math.floor(nowMs / 160) % 2 === 0;
       if (Array.isArray(state.obstacles)) {
         for (let i = 0; i < state.obstacles.length; i++) {
           const obs = state.obstacles[i];
@@ -1040,12 +1296,13 @@
 
       // 8. Chasing Police Cruisers Behind Rafa (Flashing Red/Blue Blips)
       if (Array.isArray(state.chasers)) {
+        const chaserStep = Math.floor(nowMs / 140);
         for (let i = 0; i < state.chasers.length; i++) {
           const c = state.chasers[i];
           if (!c) continue;
           const chY = mapZ(c.z ?? (10 + i * 3));
           const chX = mapX(c.x, chY);
-          const blipBlue = (Math.floor(performance.now() / 140) + i) % 2 === 0;
+          const blipBlue = (chaserStep + i) % 2 === 0;
 
           ctx.beginPath();
           ctx.arc(chX, Math.min(h - 10, chY), 4.4, 0, Math.PI * 2);
@@ -1204,13 +1461,14 @@
       if (serverStatus) {
         const isCloud = serverStatus.mode === 'supabase-cloud';
         const label = isCloud
-          ? 'SUPABASE CLOUD REALTIME'
-          : (serverStatus.mode === 'vercel-api' ? 'SUPABASE / VERCEL API' : 'MODO HÍBRIDO ATIVO');
+          ? 'Cloud Realtime'
+          : (serverStatus.mode === 'vercel-api' ? 'Vercel API' : 'Online');
 
         if (el.serverText) el.serverText.textContent = label;
         if (el.serverDot) el.serverDot.classList.toggle('cloud', isCloud);
+        if (el.menuServerDot) el.menuServerDot.classList.toggle('cloud', isCloud);
         if (el.menuServerStatusText) {
-          el.menuServerStatusText.textContent = `Conectado • ${label}`;
+          el.menuServerStatusText.textContent = label;
         }
       }
 
@@ -1228,8 +1486,7 @@
             }
           ];
 
-      const html = safeEntries
-        .slice(0, 10)
+      const buildRowsHtml = (list) => list
         .map((row, idx) => {
           const rank = idx + 1;
           const name = this._escapeHtml(row.player_name || row.playerName || 'RAFA PT-13');
@@ -1252,10 +1509,10 @@
         .join('');
 
       if (el.menuLeaderboardList) {
-        el.menuLeaderboardList.innerHTML = html;
+        el.menuLeaderboardList.innerHTML = buildRowsHtml(safeEntries.slice(0, 4));
       }
       if (el.gameoverLeaderboardList) {
-        el.gameoverLeaderboardList.innerHTML = html;
+        el.gameoverLeaderboardList.innerHTML = buildRowsHtml(safeEntries.slice(0, 5));
       }
     },
 

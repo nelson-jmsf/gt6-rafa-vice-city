@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#090414" />
-  <meta name="description" content="GT6 RAFA: FUGA DE VICE CITY (EDTECH PT-13 EDITION) — Jogo 3D estilo GTA 6 com Chopper Elétrica Fat-Tire, 6 Estrelas de Procurado, Heli-Cam ao vivo e Ranking Supabase." />
-  <title>GT6 RAFA: FUGA DE VICE CITY — EDTECH PT-13 EDITION</title>
+  <meta name="description" content="GT6 RAFA: FUGA DE VICE CITY — Jogo 3D estilo GTA 6." />
+  <title>GT6 RAFA: FUGA DE VICE CITY</title>
 
   <!-- Google Fonts: GTA / Vice City / HUD Typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -27,50 +27,17 @@
   <div id="screen-fx-overlay" class="screen-fx-overlay"></div>
 
   <!-- ===================================================================== -->
-  <!-- MINIMALIST GTA 6 IN-GAME HUD OVERLAY (92% UNOBSTRUCTED 3D VIEW)       -->
+  <!-- ULTRA-MINIMALIST GTA 6 IN-GAME HUD (95%+ UNOBSTRUCTED 3D VIEWPORT)    -->
   <!-- ===================================================================== -->
   <div id="gta-hud" class="gta-hud">
 
-    <!-- TOP-LEFT: Ultra-Minimalist 28px Transparent Quick Strip (No Cards/Boxes) -->
+    <!-- TOP-LEFT: Single Subtle 30x30px Pause Button -->
     <header class="hud-top-left">
-      <div class="hud-toolbar" aria-label="Atalhos Rápidos">
-        <button type="button" id="btn-pause-game" class="hud-tool-btn" title="Pausar / Menu [ESC / P]">
-          ⏸ <span id="lbl-pause-state" class="sr-only">PAUSA</span>
-        </button>
-        <button type="button" id="btn-toggle-camera" class="hud-tool-btn" title="Alternar Câmera 3D [C]">
-          🎥
-        </button>
-        <button type="button" id="btn-gfx-quality" class="hud-tool-btn active" data-quality="ULTRA" title="Qualidade Gráfica 3D [G]">
-          ✨ <span id="lbl-gfx-quality" class="sr-only">3D ULTRA</span>
-        </button>
-        <button type="button" id="btn-toggle-mute" class="hud-tool-btn" title="Som / Rádio COPOM [M]">
-          🔊 <span id="lbl-mute-state" class="sr-only">SOM ON</span>
-        </button>
-        <button type="button" id="btn-toggle-helicam" class="hud-tool-btn" title="Alternar Heli-Cam PiP">
-          🚁
-        </button>
-        <button type="button" id="btn-open-cutscene" class="hud-tool-btn" title="Assistir Vídeo Oficial">
-          🎬
-        </button>
-        <button type="button" id="btn-open-config" class="hud-tool-btn" title="Configurar Supabase Cloud">
-          ⚙
-        </button>
-        <span class="minimal-dist-badge" id="hud-distance" title="Distância Percorrida">0 m</span>
-      </div>
-
-      <!-- Hidden Legacy Telemetry Nodes (Preserved in DOM to prevent null references) -->
-      <div class="hud-hidden-legacy" aria-hidden="true">
-        <span id="hud-player-name">RAFA PT-13</span>
-        <div id="hud-server-pill"><span id="hud-server-dot"></span><span id="hud-server-text">ONLINE</span></div>
-        <span id="hud-score">0</span>
-        <span id="hud-roadblocks">0</span>
-        <div id="hud-combo-chip"><span id="hud-combo">x1.0</span></div>
-      </div>
+      <button type="button" id="btn-pause-game" class="hud-pause-btn" title="Pausar [ESC / P]" aria-label="Pausar">⏸</button>
     </header>
 
-    <!-- TOP-RIGHT: Frameless GTA Wanted Stars + Green Cash + 4px Health/Armor Bars + SMG 558-30 -->
+    <!-- TOP-RIGHT: 6 Wanted Stars + Green Cash + Thin Red/White Bars + SMG 558-30 -->
     <aside class="hud-top-right" id="hud-top-right">
-      <!-- Top Row: 6 Crisp Frameless Wanted Stars -->
       <div class="wanted-stars-row" id="hud-wanted-stars" aria-label="Nível de Procurado">
         <span class="wanted-star active" data-star="1">★</span>
         <span class="wanted-star active" data-star="2">★</span>
@@ -80,7 +47,6 @@
         <span class="wanted-star active" data-star="6">★</span>
       </div>
 
-      <!-- Below Stars: Left Column (Cash + Thin 4px Health/Armor Bars) & Right Column (SMG 558-30) -->
       <div class="gta-topright-subrow">
         <div class="gta-cash-vitals-col">
           <div class="gta-cash-row">
@@ -117,44 +83,7 @@
       <div class="toast-subtitle" id="toast-subtitle">SALTO SOBRE VIATURAS EM ALTA VELOCIDADE</div>
     </div>
 
-    <!-- PICTURE-IN-PICTURE HELI-CAM MONITOR (Hidden by default so it never blocks gameplay) -->
-    <aside id="helicam-pip" class="helicam-pip hidden-pip">
-      <div class="helicam-header">
-        <div class="helicam-rec">
-          <span class="rec-dot"></span>
-          <span class="helicam-title" id="helicam-label">HELI-CAM ÁGUIA 01</span>
-        </div>
-        <div class="helicam-actions">
-          <button type="button" id="btn-helicam-sound" class="helicam-mini-btn" title="Áudio do Vídeo">🔇</button>
-          <button type="button" id="btn-helicam-fullscreen" class="helicam-mini-btn" title="Expandir Vídeo">⛶</button>
-        </div>
-      </div>
-      <div class="helicam-viewport">
-        <video
-          id="helicam-video"
-          class="helicam-video"
-          src="./assets/rafa-chase.mp4"
-          poster="./assets/rafa-poster.jpg"
-          muted
-          loop
-          playsinline
-          preload="metadata"
-        ></video>
-        <div class="helicam-reticle-overlay">
-          <div class="reticle-corner tl"></div>
-          <div class="reticle-corner tr"></div>
-          <div class="reticle-corner bl"></div>
-          <div class="reticle-corner br"></div>
-          <div class="reticle-crosshair"></div>
-          <div class="helicam-telemetry-bottom">
-            <span id="helicam-target-tag">ALVO: RAFA PT-13</span>
-            <span id="helicam-speed-lock">188 KM/H • 6★</span>
-          </div>
-        </div>
-      </div>
-    </aside>
-
-    <!-- BOTTOM-LEFT: Clean Circular GTA Radar Minimap (154px Desktop / 120px Mobile, No Street Banner) -->
+    <!-- BOTTOM-LEFT: Clean Circular GTA Radar Minimap -->
     <section class="hud-bottom-left" id="hud-radar-container" aria-label="Radar GTA">
       <div class="radar-outer-ring" id="radar-outer-ring">
         <div class="radar-north-badge" id="radar-north-badge">N</div>
@@ -168,7 +97,6 @@
     <section id="radio-banner" class="radio-subtitle-overlay" aria-live="polite">
       <span class="sr-only" id="radio-speaker">COPOM</span>
       <p class="radio-subtitle-text" id="radio-text"></p>
-      <button type="button" id="btn-replay-dispatch" class="sr-only" tabindex="-1">🔈</button>
     </section>
 
     <!-- TOUCH CONTROLS (Hidden on Desktop; Shown Only on Touch/Mobile Devices) -->
@@ -199,7 +127,7 @@
       </button>
     </nav>
 
-    <!-- BOTTOM-RIGHT: Frameless GTA Analog + Digital Speedometer (145px Diameter, No Battery Card) -->
+    <!-- BOTTOM-RIGHT: Frameless GTA Analog + Digital Speedometer -->
     <section class="hud-bottom-right" id="hud-speedometer-container" aria-label="Velocímetro">
       <div class="speedo-dial-wrapper">
         <canvas id="speedo-canvas" width="180" height="180"></canvas>
@@ -208,7 +136,6 @@
         </div>
         <span class="sr-only" id="hud-gear-tag">D6</span>
       </div>
-      <!-- Hidden legacy nitro DOM nodes for backwards compatibility (Nitro arc is drawn inside speedometer) -->
       <div class="sr-only" aria-hidden="true">
         <span id="hud-nitro-val">100%</span>
         <div id="hud-nitro-bar" style="width: 100%;"></div>
@@ -218,277 +145,113 @@
   </div>
 
   <!-- ===================================================================== -->
-  <!-- START MENU & POSTER SHOWCASE MODAL                                    -->
+  <!-- ULTRA-MINIMALIST 2-COLUMN START MENU MODAL                            -->
   <!-- ===================================================================== -->
   <div id="start-menu-modal" class="modal-backdrop active" role="dialog" aria-modal="true" aria-labelledby="start-title">
     <div class="start-menu-shell">
 
-      <!-- Left Column: User's Official GTA 6 Rafa Poster & Video Preview -->
-      <div class="poster-showcase-card">
-        <div class="poster-frame">
-          <img
-            src="./assets/rafa-poster.jpg"
-            alt="Pôster Oficial GTA 6 Rafa na Chopper Elétrica EDTECH PT-13 com 6 Estrelas"
-            class="poster-img"
-          />
-          <div class="poster-overlay-badge top-stars">★ ★ ★ ★ ★ ★</div>
-          <div class="poster-overlay-badge bottom-caption">
-            <span class="caption-tag">PROCURADO Nº 1 DE VICE CITY</span>
-            <strong>RAFA • EDTECH PT-13 FAT-CHOPPER</strong>
-          </div>
-        </div>
-
-        <div class="poster-specs-grid">
-          <div class="spec-item">
-            <span class="spec-lbl">VEÍCULO</span>
-            <strong class="spec-val">Chopper Elétrica Fat-Tire Red</strong>
-          </div>
-          <div class="spec-item">
-            <span class="spec-lbl">VEL. MÁXIMA</span>
-            <strong class="spec-val">300 km/h (Overdrive EDTECH)</strong>
-          </div>
-          <div class="spec-item">
-            <span class="spec-lbl">RECOMPENSA</span>
-            <strong class="spec-val cash-green">$1,956,791+</strong>
-          </div>
-          <div class="spec-item">
-            <span class="spec-lbl">NÍVEL DE AMEAÇA</span>
-            <strong class="spec-val gold-stars">6★ Apoio Aéreo + Bloqueio</strong>
-          </div>
-        </div>
+      <!-- Left: Clean Poster Image (No Overlays) -->
+      <div class="poster-frame">
+        <img
+          src="./assets/rafa-poster.jpg"
+          alt="GT6 Rafa — Fuga de Vice City"
+          class="poster-img"
+        />
       </div>
 
-      <!-- Center Column: Mission Briefing, Player Callsign & Launch Controls -->
+      <!-- Right: Minimalist Launch Panel & Compact Top 3 Ranking -->
       <div class="start-main-panel">
-        <div class="vice-kicker">GRAND THEFT SCOOTER VI • EDIÇÃO ESPECIAL</div>
-        <h1 id="start-title" class="start-hero-title">
-          GT6 RAFA: <span>FUGA DE VICE CITY</span>
-        </h1>
-        <p class="start-hero-subtitle">
-          A polícia fechou a avenida com viaturas e o helicóptero Águia 01 está na sua cola! Acelere a Chopper Elétrica
-          <strong>EDTECH PT-13</strong>, salte pelas rampas furando o bloqueio com faíscas voando e proteja sua recompensa de
-          <strong class="cash-highlight">$1.956.791</strong>!
+        <div class="start-header">
+          <h1 id="start-title" class="start-hero-title">GT6 <span>RAFA</span></h1>
+          <p class="start-hero-subtitle">Fuga de Vice City</p>
+        </div>
+
+        <input
+          type="text"
+          id="player-name-input"
+          class="pilot-input"
+          maxlength="24"
+          value="RAFA PT-13"
+          placeholder="Piloto..."
+          aria-label="Nome do Piloto"
+          autocomplete="off"
+        />
+
+        <button type="button" id="btn-start-game" class="btn-gta-primary">
+          ▶ JOGAR
+        </button>
+
+        <div class="start-leaderboard-box">
+          <div class="lb-panel-header">
+            <span class="lb-title">🏆 TOP 3</span>
+            <div class="lb-status-inline" id="menu-server-banner">
+              <span class="status-dot online" id="menu-server-dot"></span>
+              <span id="menu-server-status-text">Online</span>
+              <button type="button" id="btn-refresh-leaderboard" class="lb-refresh-btn" title="Atualizar Ranking">↻</button>
+            </div>
+          </div>
+          <div class="leaderboard-list compact-top3" id="menu-leaderboard-list">
+            <!-- Populated dynamically by GT6UI.renderLeaderboard() -->
+          </div>
+        </div>
+
+        <p class="controls-hint-line">
+          A/D Curvas • S Drift • Espaço Pular • Shift Nitro
         </p>
-
-        <!-- Player Name Input -->
-        <div class="callsign-input-group">
-          <label for="player-name-input">IDENTIFICAÇÃO DO PILOTO (RANKING SUPABASE):</label>
-          <div class="callsign-row">
-            <input
-              type="text"
-              id="player-name-input"
-              maxlength="24"
-              value="RAFA PT-13"
-              placeholder="Digite seu codinome..."
-              autocomplete="off"
-            />
-            <span class="vehicle-badge">PT-13 // EDTECH</span>
-          </div>
-        </div>
-
-        <!-- Primary Launch Buttons -->
-        <div class="start-cta-stack">
-          <button type="button" id="btn-start-game" class="btn-gta-primary">
-            🔥 INICIAR FUGA EM VICE CITY (JOGAR 3D)
-          </button>
-          <div class="start-secondary-btns">
-            <button type="button" id="btn-watch-trailer" class="btn-gta-secondary">
-              🎬 ASSISTIR VÍDEO REAL DA PERSEGUIÇÃO
-            </button>
-            <button type="button" id="btn-menu-supabase" class="btn-gta-outline">
-              ⚙️ CONFIGURAR SUPABASE CLOUD
-            </button>
-          </div>
-        </div>
-
-        <!-- Controls Cheat Sheet -->
-        <div class="controls-guide-box">
-          <div class="guide-title">COMANDOS DE FUGA (TECLADO / TOUCH / MOUSE)</div>
-          <div class="guide-grid">
-            <div><kbd>A</kbd> <kbd>D</kbd> ou <kbd>⬅️</kbd> <kbd>➡️</kbd> Mudar Faixa + Faíscas</div>
-            <div><kbd>ESPAÇO</kbd> ou <kbd>W</kbd> Empinar / Saltar Rampa</div>
-            <div><kbd>SHIFT</kbd> ou <kbd>E</kbd> Nitro Overdrive 300 km/h</div>
-            <div><kbd>F</kbd> ou <kbd>Q</kbd> Pulso EMP / SMG (558-30)</div>
-            <div><kbd>S</kbd> ou <kbd>⬇️</kbd> Drift Pesado (Recarrega Nitro)</div>
-            <div><kbd>C</kbd> Câmera • <kbd>G</kbd> 3D Ultra • <kbd>P</kbd> Pausa • <kbd>M</kbd> Áudio</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Right Column: Live Leaderboard & Supabase Status -->
-      <div class="start-leaderboard-panel">
-        <div class="lb-panel-header">
-          <div>
-            <div class="lb-kicker">TOP FUGITIVOS DE VICE CITY</div>
-            <h2 class="lb-title">🏆 RANKING AO VIVO</h2>
-          </div>
-          <button type="button" id="btn-refresh-leaderboard" class="lb-refresh-btn" title="Atualizar Ranking">
-            🔄
-          </button>
-        </div>
-
-        <div class="lb-server-banner" id="menu-server-banner">
-          <span class="status-dot online" id="menu-server-dot"></span>
-          <span id="menu-server-status-text">Conectado • Supabase / Vercel API</span>
-        </div>
-
-        <div class="leaderboard-list" id="menu-leaderboard-list">
-          <!-- Populated dynamically by GT6UI.renderLeaderboard() -->
-        </div>
       </div>
 
     </div>
   </div>
 
   <!-- ===================================================================== -->
-  <!-- FULLSCREEN / MODAL INTRO CUTSCENE & VIDEO PLAYER (rafa-chase.mp4)     -->
+  <!-- COMPACT PAUSE MODAL                                                   -->
   <!-- ===================================================================== -->
-  <div id="cutscene-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Cutscene Oficial da Perseguição">
-    <div class="cutscene-modal-card">
-      <div class="cutscene-top-bar">
-        <div class="cutscene-badge">
-          <span class="rec-dot"></span>
-          <span>TRANSMISSÃO POLICIAL COPOM // ARQUIVO DE EVIDÊNCIA: RAFA PT-13 ($1.956.791)</span>
-        </div>
-        <div class="cutscene-top-actions">
-          <button type="button" id="btn-cutscene-play-3d" class="btn-gta-primary btn-sm">
-            🎮 ENTRAR NA FUGA 3D AGORA
-          </button>
-          <button type="button" id="btn-close-cutscene" class="btn-modal-close" title="Fechar Vídeo">✕</button>
-        </div>
-      </div>
-
-      <div class="cutscene-video-container">
-        <video
-          id="cutscene-video"
-          class="cutscene-video"
-          src="./assets/rafa-chase.mp4"
-          poster="./assets/rafa-poster.jpg"
-          controls
-          playsinline
-          preload="metadata"
-        ></video>
-      </div>
-
-      <div class="cutscene-transcript-bar">
-        <span class="transcript-tag">📻 TRANSCRIÇÃO COPOM:</span>
-        <span id="cutscene-transcript-text">
-          "Atenção todas as unidades, suspeito em fuga na avenida! Ele está em alta velocidade, enviem reforços! Cuidado, ele está furando o bloqueio! Apoio aéreo a caminho, cerquem a área! Não deixem ele escapar, fechem a via!"
-        </span>
+  <div id="pause-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+    <div class="pause-card">
+      <h2 id="pause-title" class="pause-title">PAUSA</h2>
+      <div class="pause-actions">
+        <button type="button" id="btn-pause-resume" class="btn-gta-primary">▶ CONTINUAR</button>
+        <button type="button" id="btn-pause-mute" class="btn-gta-outline">🔊 SOM</button>
+        <button type="button" id="btn-pause-restart" class="btn-gta-outline">↻ REINICIAR</button>
+        <button type="button" id="btn-pause-menu" class="btn-gta-outline">🏠 MENU</button>
       </div>
     </div>
   </div>
 
   <!-- ===================================================================== -->
-  <!-- WASTED / BUSTED (CERCO FECHADO) GAME OVER MODAL                       -->
+  <!-- COMPACT GAME OVER (CERCO FECHADO) MODAL                               -->
   <!-- ===================================================================== -->
   <div id="gameover-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="gameover-title">
     <div class="gameover-card">
-      <div class="police-tape-banner">⚠️ CERCO POLICIAL FECHADO // FIM DA LINHA EM VICE CITY ⚠️</div>
-
       <h2 id="gameover-title" class="gameover-stamp">CERCO FECHADO</h2>
-      <p id="gameover-subtitle" class="gameover-reason">
-        As viaturas da polícia e o helicóptero Águia 01 cercaram a Chopper EDTECH PT-13!
-      </p>
+      <p id="gameover-subtitle" class="gameover-reason">Fim da fuga em Vice City.</p>
 
-      <!-- Run Summary Grid -->
       <div class="gameover-stats-grid">
         <div class="go-stat-box highlight-cash">
-          <span class="go-stat-label">RECOMPENSA ACUMULADA</span>
+          <span class="go-stat-label">CASH</span>
           <strong class="go-stat-value" id="go-bounty-cash">$1,956,898</strong>
         </div>
         <div class="go-stat-box">
-          <span class="go-stat-label">PONTUAÇÃO DA FUGA</span>
-          <strong class="go-stat-value" id="go-score">0</strong>
-        </div>
-        <div class="go-stat-box">
-          <span class="go-stat-label">DISTÂNCIA PERCORRIDA</span>
+          <span class="go-stat-label">DISTÂNCIA</span>
           <strong class="go-stat-value" id="go-distance">0 m</strong>
         </div>
         <div class="go-stat-box">
-          <span class="go-stat-label">VELOCIDADE MÁXIMA</span>
+          <span class="go-stat-label">VEL. MÁX</span>
           <strong class="go-stat-value" id="go-max-speed">188 km/h</strong>
-        </div>
-        <div class="go-stat-box">
-          <span class="go-stat-label">BLOQUEIOS FURADOS</span>
-          <strong class="go-stat-value" id="go-roadblocks">0</strong>
-        </div>
-        <div class="go-stat-box">
-          <span class="go-stat-label">NÍVEL DE PROCURADO</span>
-          <strong class="go-stat-value gold-stars" id="go-wanted-stars">★★★★★★</strong>
         </div>
       </div>
 
-      <!-- Game Over Leaderboard Snapshot -->
       <div class="gameover-leaderboard-box">
         <div class="go-lb-header">
-          <span>🏆 RANKING ATUALIZADO (SUPABASE / VERCEL)</span>
-          <span id="go-sync-status" class="go-sync-badge">✔ SCORE SINCRONIZADO</span>
+          <span>🏆 RANKING</span>
+          <span id="go-sync-status" class="go-sync-badge">✔ SINCRONIZADO</span>
         </div>
         <div id="gameover-leaderboard-list" class="leaderboard-list compact"></div>
       </div>
 
       <div class="gameover-actions">
-        <button type="button" id="btn-restart-game" class="btn-gta-primary">
-          🔄 FURAR O CERCO NOVAMENTE (JOGAR DE NOVO)
-        </button>
-        <button type="button" id="btn-gameover-video" class="btn-gta-secondary">
-          🎬 REPLAY HELI-CAM (VÍDEO)
-        </button>
-        <button type="button" id="btn-gameover-menu" class="btn-gta-outline">
-          🏠 MENU PRINCIPAL
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ===================================================================== -->
-  <!-- SUPABASE CLOUD CONFIGURATION MODAL                                    -->
-  <!-- ===================================================================== -->
-  <div id="supabase-config-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="supabase-modal-title">
-    <div class="config-modal-card">
-      <div class="config-modal-header">
-        <div>
-          <div class="lb-kicker">INTEGRAÇÃO CLOUD &amp; SERVERLESS</div>
-          <h3 id="supabase-modal-title">⚙️ CONFIGURAÇÃO SUPABASE &amp; VERCEL</h3>
-        </div>
-        <button type="button" id="btn-close-config" class="btn-modal-close">✕</button>
-      </div>
-
-      <p class="config-desc">
-        O jogo funciona imediatamente com a API Serverless (<code>/api/leaderboard</code> e <code>/api/telemetry</code>) e banco híbrido pré-carregado com a fuga de <strong>Rafa PT-13 ($1.956.898)</strong>.
-        Para conectar diretamente ao seu projeto <strong>Supabase PostgreSQL</strong> em tempo real, insira a URL e a Anon Key abaixo:
-      </p>
-
-      <div class="config-form">
-        <label for="input-supabase-url">SUPABASE PROJECT URL:</label>
-        <input
-          type="url"
-          id="input-supabase-url"
-          placeholder="https://seu-projeto.supabase.co"
-          autocomplete="off"
-        />
-
-        <label for="input-supabase-key">SUPABASE ANON / PUBLIC KEY:</label>
-        <input
-          type="password"
-          id="input-supabase-key"
-          placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-          autocomplete="off"
-        />
-
-        <div id="config-status-msg" class="config-status-msg">
-          Status atual: Modo Híbrido Serverless + LocalStorage ativo.
-        </div>
-
-        <div class="config-actions">
-          <button type="button" id="btn-save-supabase" class="btn-gta-primary btn-sm">
-            💾 SALVAR &amp; TESTAR CONEXÃO
-          </button>
-          <button type="button" id="btn-clear-supabase" class="btn-gta-outline btn-sm">
-            🗑️ USAR PADRÃO SERVERLESS
-          </button>
-        </div>
+        <button type="button" id="btn-restart-game" class="btn-gta-primary">↻ JOGAR NOVAMENTE</button>
+        <button type="button" id="btn-gameover-menu" class="btn-gta-outline">Menu</button>
       </div>
     </div>
   </div>

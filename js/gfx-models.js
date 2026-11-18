@@ -1,13 +1,16 @@
 /**
  * GT6 RAFA: FUGA DE VICE CITY (EDTECH PT-13 EDITION)
- * Realistic 3D Character & Vehicle Modeling Suite (Three.js r128)
- * Faithful to reference video (WhatsApp Video 2026-11-18 at 15.13.43.mp4) & poster (assets/rafa-poster.jpg)
+ * Realistic Organic 3D Character & Sculpted Automotive Modeling Suite (Three.js r128)
+ * High-performance low-draw-call procedural meshes faithful to reference video & poster.
  * Attach: window.GT6Models
  */
 (function () {
   'use strict';
 
-  // Helper for rounded rectangles on 2D canvas
+  // ---------------------------------------------------------------------------
+  // 2D CANVAS HELPERS
+  // ---------------------------------------------------------------------------
+
   function fillRoundRect(ctx, x, y, w, h, r) {
     const radius = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
     ctx.beginPath();
@@ -40,34 +43,11 @@
     ctx.stroke();
   }
 
-  // Create PBR Material utilizing MeshPhysicalMaterial when available (for clearcoat) or MeshStandardMaterial
-  function createPBRMaterial(THREE, params, envMap) {
-    const isPhysical =
-      typeof THREE.MeshPhysicalMaterial === 'function' &&
-      (params.clearcoat !== undefined || params.transmission !== undefined);
-    const MatClass = isPhysical ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
-    const cleanParams = Object.assign({}, params);
-    if (!isPhysical) {
-      delete cleanParams.clearcoat;
-      delete cleanParams.clearcoatRoughness;
-      delete cleanParams.reflectivity;
-      delete cleanParams.transmission;
-    }
-    if (envMap && cleanParams.envMap === undefined) {
-      cleanParams.envMap = envMap;
-    }
-    if (cleanParams.envMapIntensity === undefined) {
-      cleanParams.envMapIntensity = 1.25;
-    }
-    return new MatClass(cleanParams);
-  }
-
   // Draw the signature 8-tooth EDTECH mechanical gear + "EDTECH" typography
   function drawEdtechGearLogo(ctx, cx, cy, outerRadius, darkBgHex, allWhiteText) {
     ctx.save();
     ctx.translate(cx, cy);
 
-    // 8 mechanical gear teeth
     ctx.fillStyle = '#f8fafc';
     const toothW = outerRadius * 0.36;
     const toothH = outerRadius * 0.34;
@@ -78,18 +58,15 @@
       ctx.restore();
     }
 
-    // Gear outer ring
     ctx.beginPath();
     ctx.arc(0, 0, outerRadius, 0, Math.PI * 2);
     ctx.fill();
 
-    // Inner gear hole
     ctx.fillStyle = darkBgHex || '#0b0c10';
     ctx.beginPath();
     ctx.arc(0, 0, outerRadius * 0.65, 0, Math.PI * 2);
     ctx.fill();
 
-    // Horizontal banner across gear center for "EDTECH"
     const bannerW = outerRadius * 3.15;
     const bannerH = outerRadius * 0.72;
     ctx.fillStyle = darkBgHex || '#0b0c10';
@@ -112,11 +89,1039 @@
     ctx.restore();
   }
 
+  // ---------------------------------------------------------------------------
+  // FAST SHARED PBR MATERIAL & GEOMETRY MERGE / ORGANIC SCULPTING HELPERS
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Create a fast MeshStandardMaterial tuned for crisp 60 FPS nocturnal lighting
+   * (avoids expensive multi-lobe MeshPhysicalMaterial clearcoat shaders).
+   */
+  function createStdMat(THREE, params, envMap) {
+    const clean = {
+      color: params.color !== undefined ? params.color : 0xffffff,
+      roughness: params.roughness !== undefined ? params.roughness : 0.4,
+      metalness: params.metalness !== undefined ? params.metalness : 0.1
+    };
+    if (params.map) clean.map = params.map;
+    if (params.bumpMap) {
+      clean.bumpMap = params.bumpMap;
+      clean.bumpScale = params.bumpScale !== undefined ? params.bumpScale : 0.02;
+    }
+    if (params.emissive !== undefined) clean.emissive = params.emissive;
+    if (params.emissiveIntensity !== undefined) clean.emissiveIntensity = params.emissiveIntensity;
+    if (params.transparent) clean.transparent = true;
+    if (params.opacity !== undefined) clean.opacity = params.opacity;
+    if (params.side !== undefined) clean.side = params.side;
+    if (params.depthWrite !== undefined) clean.depthWrite = params.depthWrite;
+    if (envMap) {
+      clean.envMap = envMap;
+      clean.envMapIntensity = params.envMapIntensity !== undefined ? params.envMapIntensity : 1.3;
+    }
+    return new THREE.MeshStandardMaterial(clean);
+  }
+
+  /**
+   * Merge an array of BufferGeometries sharing one material into a single indexed BufferGeometry
+   * to slash WebGL draw calls without sacrificing geometric detail.
+   */
+  function mergeGeometries(THREE, geometries) {
+    const valid = [];
+    let totalVerts = 0;
+    let totalIndices = 0;
+
+    for (let i = 0; i < geometries.length; i++) {
+      const geo = geometries[i];
+      if (!geo || !geo.attributes || !geo.attributes.position) continue;
+      if (!geo.attributes.normal) geo.computeVertexNormals();
+      const pos = geo.attributes.position;
+      const idx = geo.index;
+      totalVerts += pos.count;
+      totalIndices += idx ? idx.count : pos.count;
+      valid.push(geo);
+    }
+
+    if (valid.length === 0) return new THREE.BufferGeometry();
+    if (valid.length === 1) return valid[0];
+
+    const positions = new Float32Array(totalVerts * 3);
+    const normals = new Float32Array(totalVerts * 3);
+    const uvs = new Float32Array(totalVerts * 2);
+    const IndexArr = totalVerts > 65535 ? Uint32Array : Uint16Array;
+    const indices = new IndexArr(totalIndices);
+
+    let vOffset = 0;
+    let iOffset = 0;
+
+    for (let g = 0; g < valid.length; g++) {
+      const geo = valid[g];
+      const posArr = geo.attributes.position.array;
+      const normArr = geo.attributes.normal.array;
+      const uvAttr = geo.attributes.uv;
+      const count = geo.attributes.position.count;
+
+      positions.set(posArr, vOffset * 3);
+      normals.set(normArr, vOffset * 3);
+      if (uvAttr) {
+        uvs.set(uvAttr.array, vOffset * 2);
+      }
+
+      if (geo.index) {
+        const srcIdx = geo.index.array;
+        for (let k = 0; k < srcIdx.length; k++) {
+          indices[iOffset + k] = srcIdx[k] + vOffset;
+        }
+        iOffset += srcIdx.length;
+      } else {
+        for (let k = 0; k < count; k++) {
+          indices[iOffset + k] = vOffset + k;
+        }
+        iOffset += count;
+      }
+
+      vOffset += count;
+    }
+
+    const merged = new THREE.BufferGeometry();
+    merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    merged.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    merged.setIndex(new THREE.BufferAttribute(indices, 1));
+    merged.computeBoundingSphere();
+    return merged;
+  }
+
+  /**
+   * Transform and bake a BufferGeometry in place so it can be cleanly merged.
+   */
+  function bakeGeo(geo, tx, ty, tz, rx, ry, rz, sx, sy, sz) {
+    if (sx !== undefined && (sx !== 1 || sy !== 1 || sz !== 1)) {
+      geo.scale(sx, sy, sz);
+    }
+    if (rx) geo.rotateX(rx);
+    if (ry) geo.rotateY(ry);
+    if (rz) geo.rotateZ(rz);
+    if (tx || ty || tz) geo.translate(tx || 0, ty || 0, tz || 0);
+    return geo;
+  }
+
+  /**
+   * Build a smooth anatomical lofted surface along a sequence of cross-section rings.
+   * Each ring specifies { y, cx, cz, rx, rz, v, shapeFn(theta) }.
+   * Winding is strictly verified outward using right-handed basis U=+X, V=-Z, T=+Y.
+   */
+  function createAnatomicalLoft(THREE, rings, radialSegments, capBottom, capTop) {
+    const segs = radialSegments || 28;
+    const stride = segs + 1;
+    const ringCount = rings.length;
+    const vertCount = ringCount * stride + (capBottom ? stride + 1 : 0) + (capTop ? stride + 1 : 0);
+
+    const positions = new Float32Array(vertCount * 3);
+    const uvs = new Float32Array(vertCount * 2);
+    const indices = [];
+
+    let pIdx = 0;
+    let uvIdx = 0;
+
+    for (let r = 0; r < ringCount; r++) {
+      const ring = rings[r];
+      const vCoord = ring.v !== undefined ? ring.v : r / Math.max(1, ringCount - 1);
+      const cx = ring.cx || 0;
+      const cz = ring.cz || 0;
+
+      for (let s = 0; s <= segs; s++) {
+        const uCoord = s / segs;
+        const theta = uCoord * Math.PI * 2;
+        const cosT = Math.cos(theta);
+        const sinT = Math.sin(theta);
+
+        let rx = ring.rx;
+        let rz = ring.rz;
+        let dy = 0;
+
+        if (typeof ring.shapeFn === 'function') {
+          const mod = ring.shapeFn(theta, cosT, sinT);
+          if (mod) {
+            if (mod.rx !== undefined) rx = mod.rx;
+            if (mod.rz !== undefined) rz = mod.rz;
+            if (mod.dr !== undefined) {
+              rx += mod.dr;
+              rz += mod.dr;
+            }
+            if (mod.dy !== undefined) dy = mod.dy;
+          }
+        }
+
+        // Basis: U = +X, V = -Z (so theta=PI/2 points toward -Z front chest, theta=1.5*PI toward +Z back)
+        positions[pIdx++] = cx + cosT * rx;
+        positions[pIdx++] = ring.y + dy;
+        positions[pIdx++] = cz - sinT * rz;
+
+        uvs[uvIdx++] = uCoord;
+        uvs[uvIdx++] = vCoord;
+      }
+    }
+
+    for (let r = 0; r < ringCount - 1; r++) {
+      for (let s = 0; s < segs; s++) {
+        const a = r * stride + s;
+        const b = r * stride + (s + 1);
+        const c = (r + 1) * stride + (s + 1);
+        const d = (r + 1) * stride + s;
+        indices.push(a, b, d, b, c, d);
+      }
+    }
+
+    // Optional bottom and top end caps
+    let extraVertexStart = ringCount * stride;
+    if (capBottom) {
+      const first = rings[0];
+      const centerIdx = extraVertexStart++;
+      positions[centerIdx * 3] = first.cx || 0;
+      positions[centerIdx * 3 + 1] = first.y;
+      positions[centerIdx * 3 + 2] = first.cz || 0;
+      uvs[centerIdx * 2] = 0.5;
+      uvs[centerIdx * 2 + 1] = 0;
+
+      for (let s = 0; s <= segs; s++) {
+        const dst = extraVertexStart + s;
+        const src = s;
+        positions[dst * 3] = positions[src * 3];
+        positions[dst * 3 + 1] = positions[src * 3 + 1];
+        positions[dst * 3 + 2] = positions[src * 3 + 2];
+        uvs[dst * 2] = 0.5;
+        uvs[dst * 2 + 1] = 0;
+      }
+      for (let s = 0; s < segs; s++) {
+        indices.push(centerIdx, extraVertexStart + s + 1, extraVertexStart + s);
+      }
+      extraVertexStart += stride;
+    }
+
+    if (capTop) {
+      const last = rings[ringCount - 1];
+      const topRowStart = (ringCount - 1) * stride;
+      const centerIdx = extraVertexStart++;
+      positions[centerIdx * 3] = last.cx || 0;
+      positions[centerIdx * 3 + 1] = last.y;
+      positions[centerIdx * 3 + 2] = last.cz || 0;
+      uvs[centerIdx * 2] = 0.5;
+      uvs[centerIdx * 2 + 1] = 1;
+
+      for (let s = 0; s <= segs; s++) {
+        const dst = extraVertexStart + s;
+        const src = topRowStart + s;
+        positions[dst * 3] = positions[src * 3];
+        positions[dst * 3 + 1] = positions[src * 3 + 1];
+        positions[dst * 3 + 2] = positions[src * 3 + 2];
+        uvs[dst * 2] = 0.5;
+        uvs[dst * 2 + 1] = 1;
+      }
+      for (let s = 0; s < segs; s++) {
+        indices.push(centerIdx, extraVertexStart + s, extraVertexStart + s + 1);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  /**
+   * Build a smooth curved anatomical limb (arm, forearm, thigh+calf) along a CatmullRomCurve3
+   * with muscle-landmark radius tapering & elliptical cross-sections (zero stiff cylinders!).
+   */
+  function createLoftedSplineLimb(THREE, points, radiusFn, pathSegments, radialSegments, capEnds) {
+    const curve = new THREE.CatmullRomCurve3(points);
+    const segs = pathSegments || 20;
+    const radSegs = radialSegments || 18;
+    const frames = curve.computeFrenetFrames(segs, false);
+    const stride = radSegs + 1;
+
+    const ringVerts = (segs + 1) * stride;
+    const capVerts = capEnds ? 2 * (stride + 1) : 0;
+    const positions = new Float32Array((ringVerts + capVerts) * 3);
+    const uvs = new Float32Array((ringVerts + capVerts) * 2);
+    const indices = [];
+
+    const p = new THREE.Vector3();
+    const N = new THREE.Vector3();
+    const B = new THREE.Vector3();
+    const tmp = new THREE.Vector3();
+
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      curve.getPointAt(t, p);
+      N.copy(frames.normals[i]);
+      B.copy(frames.binormals[i]);
+      const rad = radiusFn(t);
+      const rx = typeof rad === 'number' ? rad : rad.rx;
+      const rb = typeof rad === 'number' ? rad : rad.rb;
+
+      for (let j = 0; j <= radSegs; j++) {
+        const u = j / radSegs;
+        const theta = u * Math.PI * 2;
+        const sinT = Math.sin(theta);
+        const cosT = Math.cos(theta);
+
+        tmp.copy(p).addScaledVector(N, -cosT * rx).addScaledVector(B, sinT * rb);
+        const idx = i * stride + j;
+        positions[idx * 3] = tmp.x;
+        positions[idx * 3 + 1] = tmp.y;
+        positions[idx * 3 + 2] = tmp.z;
+        uvs[idx * 2] = u;
+        uvs[idx * 2 + 1] = t;
+      }
+    }
+
+    for (let i = 0; i < segs; i++) {
+      for (let j = 0; j < radSegs; j++) {
+        const a = i * stride + j;
+        const b = (i + 1) * stride + j;
+        const c = (i + 1) * stride + (j + 1);
+        const d = i * stride + (j + 1);
+        indices.push(a, b, d, b, c, d);
+      }
+    }
+
+    if (capEnds) {
+      let capBase = ringVerts;
+      // Start cap
+      const p0 = curve.getPointAt(0);
+      const c0 = capBase++;
+      positions[c0 * 3] = p0.x;
+      positions[c0 * 3 + 1] = p0.y;
+      positions[c0 * 3 + 2] = p0.z;
+      uvs[c0 * 2] = 0.5;
+      uvs[c0 * 2 + 1] = 0;
+      for (let j = 0; j <= radSegs; j++) {
+        const dst = capBase + j;
+        positions[dst * 3] = positions[j * 3];
+        positions[dst * 3 + 1] = positions[j * 3 + 1];
+        positions[dst * 3 + 2] = positions[j * 3 + 2];
+        uvs[dst * 2] = 0.5;
+        uvs[dst * 2 + 1] = 0;
+      }
+      for (let j = 0; j < radSegs; j++) {
+        indices.push(c0, capBase + j + 1, capBase + j);
+      }
+      capBase += stride;
+
+      // End cap
+      const p1 = curve.getPointAt(1);
+      const c1 = capBase++;
+      const lastRow = segs * stride;
+      positions[c1 * 3] = p1.x;
+      positions[c1 * 3 + 1] = p1.y;
+      positions[c1 * 3 + 2] = p1.z;
+      uvs[c1 * 2] = 0.5;
+      uvs[c1 * 2 + 1] = 1;
+      for (let j = 0; j <= radSegs; j++) {
+        const dst = capBase + j;
+        const src = lastRow + j;
+        positions[dst * 3] = positions[src * 3];
+        positions[dst * 3 + 1] = positions[src * 3 + 1];
+        positions[dst * 3 + 2] = positions[src * 3 + 2];
+        uvs[dst * 2] = 0.5;
+        uvs[dst * 2 + 1] = 1;
+      }
+      for (let j = 0; j < radSegs; j++) {
+        indices.push(c1, capBase + j, capBase + j + 1);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  /**
+   * Build an anatomically sculpted human head + neck geometry (NO boxy blocks or bowling ball!).
+   * Deforms a clean high-segment sphere into jawline, cheekbones, brow ridge, eye sockets, nose, and chin.
+   */
+  function createAnatomicalHeadGeometry(THREE) {
+    const headSphere = new THREE.SphereGeometry(0.185, 30, 24);
+    const pos = headSphere.attributes.position;
+
+    for (let i = 0; i < pos.count; i++) {
+      let x = pos.getX(i);
+      let y = pos.getY(i);
+      let z = pos.getZ(i);
+
+      // Elongate vertically into realistic cranial proportions
+      y *= 1.12;
+      z *= 1.03;
+
+      if (y > 0.01) {
+        // Upper skull / cranium: slightly narrower at temples
+        x *= 0.87 - 0.04 * Math.min(1, y / 0.2);
+      } else {
+        // Lower face: realistic jawline taper from cheekbones down to chin
+        const jawT = Math.min(1, -y / 0.21);
+        const taper = 0.87 - 0.36 * jawT * jawT;
+        x *= taper;
+
+        // Slight masculine chin projection forward (-Z) and tuck under jaw (+Z)
+        if (z < 0 && y < -0.05) {
+          const centerMask = Math.exp(-(x * x) / 0.0045);
+          const chinBulge = Math.sin(Math.min(1, (-y - 0.05) / 0.14) * Math.PI);
+          z -= centerMask * chinBulge * 0.022;
+        }
+        // Subtle under-jaw tuck toward neck
+        if (z > -0.01 && y < -0.09) {
+          y += 0.018 * Math.min(1, (z + 0.01) / 0.12);
+        }
+      }
+
+      // Facial anatomical landmarks on anterior (-Z) hemisphere
+      if (z < -0.05) {
+        // Cheekbone prominence (y ~ -0.008, |x| ~ 0.072)
+        const cheekMask =
+          Math.exp(-Math.pow((Math.abs(x) - 0.072) / 0.036, 2)) *
+          Math.exp(-Math.pow((y + 0.006) / 0.036, 2));
+        z -= cheekMask * 0.014;
+
+        // Subtle recessed eye sockets (y ~ +0.028, |x| ~ 0.056)
+        const eyeMask =
+          Math.exp(-Math.pow((Math.abs(x) - 0.056) / 0.028, 2)) *
+          Math.exp(-Math.pow((y - 0.028) / 0.022, 2));
+        z += eyeMask * 0.016;
+
+        // Masculine brow ridge above eye sockets (y ~ +0.062)
+        const browMask =
+          Math.exp(-Math.pow(x / 0.09, 2)) *
+          Math.exp(-Math.pow((y - 0.062) / 0.018, 2));
+        z -= browMask * 0.015;
+
+        // Sculpted nose bridge & tip (midline x ~ 0, y = -0.032 .. +0.048)
+        const noseWidthMask = Math.exp(-(x * x) / 0.00055);
+        if (y > -0.04 && y < 0.055) {
+          const noseProfile = Math.sin(((y + 0.04) / 0.095) * Math.PI);
+          const tipBoost = Math.exp(-Math.pow((y + 0.018) / 0.018, 2)) * 0.018;
+          z -= noseWidthMask * (noseProfile * 0.022 + tipBoost);
+        }
+
+        // Subtle mouth/lip plane around y = -0.066
+        const lipMask =
+          Math.exp(-(x * x) / 0.0014) *
+          Math.exp(-Math.pow((y + 0.066) / 0.014, 2));
+        z -= lipMask * 0.01;
+      }
+
+      pos.setXYZ(i, x, y, z);
+    }
+
+    headSphere.computeVertexNormals();
+
+    // Smooth anatomical neck seamlessly rising from inside jacket collar into skull base
+    const neckGeo = createAnatomicalLoft(
+      THREE,
+      [
+        { y: -0.27, cx: 0, cz: 0.012, rx: 0.094, rz: 0.092 },
+        { y: -0.21, cx: 0, cz: 0.012, rx: 0.088, rz: 0.088 },
+        { y: -0.15, cx: 0, cz: 0.010, rx: 0.086, rz: 0.088 },
+        { y: -0.09, cx: 0, cz: 0.008, rx: 0.092, rz: 0.094 }
+      ],
+      22,
+      true,
+      false
+    );
+
+    // Sculpted human ears merged directly into skin geometry
+    const leftEar = bakeGeo(
+      new THREE.SphereGeometry(0.032, 12, 12),
+      -0.162,
+      0.008,
+      0.006,
+      0,
+      0.16,
+      0,
+      0.42,
+      1.12,
+      0.72
+    );
+    const rightEar = bakeGeo(
+      new THREE.SphereGeometry(0.032, 12, 12),
+      0.162,
+      0.008,
+      0.006,
+      0,
+      -0.16,
+      0,
+      0.42,
+      1.12,
+      0.72
+    );
+
+    return mergeGeometries(THREE, [headSphere, neckGeo, leftEar, rightEar]);
+  }
+
+  /**
+   * Build sculpted realistic hair cap + textured styled crown + smooth tapered rear nape fade
+   * plus sculpted jaw-hugging beard, mustache, and eyebrows (ZERO blocky cones, ZERO pale nape gap!).
+   */
+  function createSculptedHairAndBeardGeometry(THREE) {
+    // 1. Hair cap with textured top crop and smooth tapered fade down sides and nape
+    const hairSphere = new THREE.SphereGeometry(0.191, 30, 24);
+    const hPos = hairSphere.attributes.position;
+    const keepIndices = [];
+
+    for (let i = 0; i < hPos.count; i++) {
+      let x = hPos.getX(i);
+      let y = hPos.getY(i);
+      let z = hPos.getZ(i);
+
+      y *= 1.13;
+      z *= 1.04;
+      x *= 0.895;
+
+      // Determine hairline boundary:
+      // High forehead in front (z < -0.08), wraps down temples/sideburns, and drops to nape in back (z > 0.02)
+      const isCrown = y > 0.095;
+      if (isCrown) {
+        // Textured modern short styled hair crop (organic peaks along crown, higher in front like poster)
+        const frontLift = Math.max(0, -z) * 0.16;
+        const crownTexture =
+          0.008 * Math.sin(x * 68 + z * 34) +
+          0.006 * Math.cos(x * 42 - z * 58) +
+          0.012 * Math.max(0, (y - 0.14) / 0.08);
+        y += frontLift + crownTexture;
+      } else if (z > 0.01) {
+        // Back occiput & tapered nape fade smoothly hugging cranium down to y = -0.135
+        y -= 0.01;
+      }
+
+      hPos.setXYZ(i, x, y, z);
+    }
+
+    const hIdx = hairSphere.index.array;
+    for (let t = 0; t < hIdx.length; t += 3) {
+      const ia = hIdx[t];
+      const ib = hIdx[t + 1];
+      const ic = hIdx[t + 2];
+      const cy = (hPos.getY(ia) + hPos.getY(ib) + hPos.getY(ic)) / 3;
+      const cz = (hPos.getZ(ia) + hPos.getZ(ib) + hPos.getZ(ic)) / 3;
+      const cx = (hPos.getX(ia) + hPos.getX(ib) + hPos.getX(ic)) / 3;
+
+      // Clean anatomical hairline cutoff:
+      // Front hairline above forehead (y > 0.085), temples/sideburns near ears (|x| > 0.12 && y > -0.02),
+      // Back of head & nape fade smoothly down to y = -0.145 for z > 0.01
+      const inBackHair = cz > 0.01 && cy > -0.145;
+      const inTopHair = cy > 0.088 && cz > -0.175;
+      const inSideFade = Math.abs(cx) > 0.115 && cz > -0.06 && cy > -0.03;
+
+      if (inBackHair || inTopHair || inSideFade) {
+        keepIndices.push(ia, ib, ic);
+      }
+    }
+
+    const hairGeo = new THREE.BufferGeometry();
+    hairGeo.setAttribute('position', hPos);
+    hairGeo.setAttribute('uv', hairSphere.attributes.uv);
+    hairGeo.setIndex(keepIndices);
+    hairGeo.computeVertexNormals();
+
+    // Smooth tapered rear nape transition hugging neck down into collar (zero gap from chase cam!)
+    const napeGeo = createAnatomicalLoft(
+      THREE,
+      [
+        { y: -0.22, cx: 0, cz: 0.022, rx: 0.086, rz: 0.082 },
+        { y: -0.15, cx: 0, cz: 0.024, rx: 0.088, rz: 0.084 },
+        { y: -0.09, cx: 0, cz: 0.026, rx: 0.090, rz: 0.086 }
+      ],
+      18,
+      false,
+      false
+    );
+
+    // 2. Sculpted jaw-hugging short dark beard & goatee (matches anatomical jaw mesh!)
+    const beardSphere = new THREE.SphereGeometry(0.189, 28, 22);
+    const bPos = beardSphere.attributes.position;
+    for (let i = 0; i < bPos.count; i++) {
+      let x = bPos.getX(i);
+      let y = bPos.getY(i);
+      let z = bPos.getZ(i);
+
+      y *= 1.12;
+      z *= 1.035;
+      const jawT = Math.min(1, Math.max(0, -y / 0.21));
+      x *= 0.88 - 0.35 * jawT * jawT;
+      if (z < 0 && y < -0.05) {
+        const centerMask = Math.exp(-(x * x) / 0.0045);
+        const chinBulge = Math.sin(Math.min(1, (-y - 0.05) / 0.14) * Math.PI);
+        z -= centerMask * chinBulge * 0.027;
+      }
+      bPos.setXYZ(i, x, y, z);
+    }
+
+    const bIdx = beardSphere.index.array;
+    const beardKeep = [];
+    for (let t = 0; t < bIdx.length; t += 3) {
+      const ia = bIdx[t];
+      const ib = bIdx[t + 1];
+      const ic = bIdx[t + 2];
+      const cy = (bPos.getY(ia) + bPos.getY(ib) + bPos.getY(ic)) / 3;
+      const cz = (bPos.getZ(ia) + bPos.getZ(ib) + bPos.getZ(ic)) / 3;
+      const cx = (bPos.getX(ia) + bPos.getX(ib) + bPos.getX(ic)) / 3;
+
+      // Jawline & chin beard (front & lower jaw, clipped cleanly off cheeks and rear neck)
+      const isChinGoatee = cz < -0.02 && cy < -0.068 && cy > -0.21;
+      const isJawline = cz < 0.01 && cz > -0.14 && cy < -0.025 && cy > -0.175 && Math.abs(cx) > 0.055;
+      // Leave small natural skin patch below lower lip corners
+      const mouthGap = Math.abs(cx) < 0.048 && cy > -0.088 && cy < -0.048;
+
+      if ((isChinGoatee || isJawline) && !mouthGap) {
+        beardKeep.push(ia, ib, ic);
+      }
+    }
+
+    const beardGeo = new THREE.BufferGeometry();
+    beardGeo.setAttribute('position', bPos);
+    beardGeo.setAttribute('uv', beardSphere.attributes.uv);
+    beardGeo.setIndex(beardKeep);
+    beardGeo.computeVertexNormals();
+
+    // 3. Sculpted Mustache & Arched Eyebrows (curved spline tubes, zero boxes!)
+    const mustacheGeo = createLoftedSplineLimb(
+      THREE,
+      [
+        new THREE.Vector3(-0.058, -0.07, -0.158),
+        new THREE.Vector3(-0.025, -0.052, -0.184),
+        new THREE.Vector3(0, -0.049, -0.188),
+        new THREE.Vector3(0.025, -0.052, -0.184),
+        new THREE.Vector3(0.058, -0.07, -0.158)
+      ],
+      (t) => 0.011 + 0.005 * Math.sin(t * Math.PI),
+      12,
+      8,
+      true
+    );
+
+    const browLeft = createLoftedSplineLimb(
+      THREE,
+      [
+        new THREE.Vector3(-0.088, 0.055, -0.156),
+        new THREE.Vector3(-0.056, 0.065, -0.176),
+        new THREE.Vector3(-0.026, 0.058, -0.182)
+      ],
+      (t) => 0.007 + 0.003 * Math.sin(t * Math.PI),
+      6,
+      6,
+      true
+    );
+
+    const browRight = createLoftedSplineLimb(
+      THREE,
+      [
+        new THREE.Vector3(0.026, 0.058, -0.182),
+        new THREE.Vector3(0.056, 0.065, -0.176),
+        new THREE.Vector3(0.088, 0.055, -0.156)
+      ],
+      (t) => 0.007 + 0.003 * Math.sin(t * Math.PI),
+      6,
+      6,
+      true
+    );
+
+    return mergeGeometries(THREE, [hairGeo, napeGeo, beardGeo, mustacheGeo, browLeft, browRight]);
+  }
+
+  /**
+   * Build sculpted sleek black rectangular eyeglasses (NO BoxGeometry!).
+   */
+  function createGlassesGeometry(THREE) {
+    const parts = [];
+
+    [-0.062, 0.062].forEach((gx) => {
+      const outer = new THREE.Shape();
+      const w = 0.044;
+      const h = 0.028;
+      const r = 0.007;
+      outer.moveTo(-w + r, -h);
+      outer.lineTo(w - r, -h);
+      outer.quadraticCurveTo(w, -h, w, -h + r);
+      outer.lineTo(w, h - r);
+      outer.quadraticCurveTo(w, h, w - r, h);
+      outer.lineTo(-w + r, h);
+      outer.quadraticCurveTo(-w, h, -w, h - r);
+      outer.lineTo(-w, -h + r);
+      outer.quadraticCurveTo(-w, -h, -w + r, -h);
+
+      const hole = new THREE.Path();
+      const iw = 0.036;
+      const ih = 0.02;
+      const ir = 0.005;
+      hole.moveTo(-iw + ir, -ih);
+      hole.lineTo(iw - ir, -ih);
+      hole.quadraticCurveTo(iw, -ih, iw, -ih + ir);
+      hole.lineTo(iw, ih - ir);
+      hole.quadraticCurveTo(iw, ih, iw - ir, ih);
+      hole.lineTo(-iw + ir, ih);
+      hole.quadraticCurveTo(-iw, ih, -iw, ih - ir);
+      hole.lineTo(-iw, -ih + ir);
+      hole.quadraticCurveTo(-iw, -ih, -iw + ir, -ih);
+      outer.holes.push(hole);
+
+      const rimGeo = new THREE.ExtrudeGeometry(outer, {
+        depth: 0.012,
+        bevelEnabled: true,
+        bevelThickness: 0.002,
+        bevelSize: 0.002,
+        bevelSegments: 1,
+        curveSegments: 4
+      });
+      bakeGeo(rimGeo, gx, 0.028, -0.184);
+      parts.push(rimGeo);
+    });
+
+    // Nose bridge & curved side temple arms
+    parts.push(
+      createLoftedSplineLimb(
+        THREE,
+        [
+          new THREE.Vector3(-0.022, 0.038, -0.178),
+          new THREE.Vector3(0, 0.042, -0.182),
+          new THREE.Vector3(0.022, 0.038, -0.178)
+        ],
+        () => 0.0055,
+        4,
+        6,
+        true
+      )
+    );
+
+    [-1, 1].forEach((side) => {
+      parts.push(
+        createLoftedSplineLimb(
+          THREE,
+          [
+            new THREE.Vector3(side * 0.104, 0.042, -0.176),
+            new THREE.Vector3(side * 0.148, 0.04, -0.09),
+            new THREE.Vector3(side * 0.156, 0.026, 0.01)
+          ],
+          () => 0.0055,
+          6,
+          6,
+          true
+        )
+      );
+    });
+
+    return mergeGeometries(THREE, parts);
+  }
+
+  /**
+   * Build sculpted beveled automotive body geometry using a 2D side silhouette ExtrudeGeometry,
+   * oriented along -Z (front) to +Z (rear) with un-mirrored door UVs on both left & right sides!
+   */
+  function createExtrudedCarBody(THREE, isSwat) {
+    const shape = new THREE.Shape();
+
+    if (!isSwat) {
+      // Sleek GTA 6 Fastback Interceptor / Sports Sedan Silhouette
+      shape.moveTo(-2.22, 0.24);
+      shape.lineTo(-2.25, 0.44);
+      shape.lineTo(-2.20, 0.68);
+      shape.quadraticCurveTo(-2.14, 0.77, -1.96, 0.80);
+      shape.lineTo(-0.92, 0.90);
+      shape.lineTo(-0.34, 1.38);
+      shape.quadraticCurveTo(-0.14, 1.44, 0.18, 1.43);
+      shape.quadraticCurveTo(0.46, 1.41, 0.68, 1.32);
+      shape.lineTo(1.34, 0.96);
+      shape.lineTo(2.08, 0.95);
+      shape.lineTo(2.21, 1.00); // Subtle rear lip spoiler
+      shape.lineTo(2.25, 0.86);
+      shape.lineTo(2.24, 0.56);
+      shape.lineTo(2.16, 0.25);
+
+      // Rear wheel well arch centered at z = +1.38, y = 0.37, r = 0.47 (clears 0.37 tire after bevel)
+      shape.lineTo(1.85, 0.25);
+      shape.absarc(1.38, 0.37, 0.47, -0.26, Math.PI + 0.26, false);
+      shape.lineTo(0.91, 0.23);
+
+      // Rocker sill
+      shape.lineTo(-0.91, 0.23);
+
+      // Front wheel well arch centered at z = -1.38, y = 0.37, r = 0.47
+      shape.absarc(-1.38, 0.37, 0.47, -0.26, Math.PI + 0.26, false);
+      shape.lineTo(-1.85, 0.24);
+      shape.closePath();
+    } else {
+      // Armored Tactical SWAT BearCat Silhouette
+      shape.moveTo(-2.72, 0.36);
+      shape.lineTo(-2.76, 0.84);
+      shape.lineTo(-2.62, 1.18);
+      shape.lineTo(-1.58, 1.28);
+      shape.lineTo(-1.14, 2.02);
+      shape.lineTo(-0.78, 2.12);
+      shape.lineTo(2.42, 2.12);
+      shape.lineTo(2.62, 1.92);
+      shape.lineTo(2.66, 0.42);
+
+      shape.lineTo(2.21, 0.40);
+      shape.absarc(1.65, 0.46, 0.56, -0.14, Math.PI + 0.14, false);
+      shape.lineTo(1.09, 0.36);
+      shape.lineTo(-1.29, 0.36);
+      shape.absarc(-1.85, 0.46, 0.56, -0.14, Math.PI + 0.14, false);
+      shape.lineTo(-2.41, 0.36);
+      shape.closePath();
+    }
+
+    const halfWidth = isSwat ? 1.06 : 0.90;
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: halfWidth * 2,
+      bevelEnabled: true,
+      bevelThickness: isSwat ? 0.08 : 0.09,
+      bevelSize: isSwat ? 0.05 : 0.055,
+      bevelSegments: 2,
+      curveSegments: 8
+    });
+
+    geo.translate(0, 0, -halfWidth);
+    geo.rotateY(-Math.PI / 2);
+
+    // Remap side-face UVs (group 0) so decals & windows align cleanly and read un-mirrored on both sides
+    const pos = geo.attributes.position;
+    const uv = geo.attributes.uv;
+    const minZ = isSwat ? -2.82 : -2.31;
+    const maxZ = isSwat ? 2.72 : 2.31;
+    const spanZ = maxZ - minZ;
+    const minY = isSwat ? 0.31 : 0.18;
+    const maxY = isSwat ? 2.18 : 1.49;
+    const spanY = maxY - minY;
+
+    for (let i = 0; i < pos.count; i++) {
+      const vx = pos.getX(i);
+      const vy = pos.getY(i);
+      const vz = pos.getZ(i);
+      // Right side (+X): rear=+Z is left of viewer, front=-Z is right
+      // Left side (-X): front=-Z is left of viewer, rear=+Z is right
+      const u = vx >= 0 ? (maxZ - vz) / spanZ : (vz - minZ) / spanZ;
+      const v = (vy - minY) / spanY;
+      uv.setXY(i, Math.max(0, Math.min(1, u)), Math.max(0, Math.min(1, v)));
+    }
+    uv.needsUpdate = true;
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  /**
+   * Build sculpted Maverick Police Helicopter fuselage side extrusion.
+   * Nose points toward +Z, tail boom extends toward -Z (matching renderer.js!).
+   */
+  function createHeliFuselageGeometry(THREE) {
+    const shape = new THREE.Shape();
+    // Side profile in (px -> z, py -> y)
+    shape.moveTo(2.42, -0.18);
+    shape.quadraticCurveTo(2.58, 0.06, 2.08, 0.36);
+    shape.quadraticCurveTo(1.22, 0.72, 0.45, 0.88);
+    shape.lineTo(-0.78, 0.86);
+    shape.quadraticCurveTo(-1.18, 0.62, -1.55, 0.36);
+    shape.lineTo(-4.72, 0.24);
+    shape.lineTo(-5.12, 1.18); // Swept vertical tail fin
+    shape.lineTo(-4.76, 1.24);
+    shape.lineTo(-4.26, 0.38);
+    shape.lineTo(-1.46, 0.04);
+    shape.quadraticCurveTo(-0.98, -0.52, -0.35, -0.68);
+    shape.lineTo(1.18, -0.68);
+    shape.quadraticCurveTo(2.12, -0.60, 2.42, -0.18);
+    shape.closePath();
+
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: 1.12,
+      bevelEnabled: true,
+      bevelThickness: 0.24,
+      bevelSize: 0.14,
+      bevelSegments: 3,
+      curveSegments: 10
+    });
+    geo.translate(0, 0, -0.56);
+    geo.rotateY(-Math.PI / 2);
+
+    // Taper tail boom width smoothly for z < -1.1 so fuselage looks sleek & aerodynamic
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      let x = pos.getX(i);
+      const y = pos.getY(i);
+      const z = pos.getZ(i);
+      if (z < -1.0) {
+        const t = Math.min(1, (-z - 1.0) / 3.8);
+        x *= 1.0 - 0.82 * t;
+      } else if (z > 1.35) {
+        const t = Math.min(1, (z - 1.35) / 1.25);
+        x *= 1.0 - 0.32 * t * t;
+      }
+      pos.setXYZ(i, x, y, z);
+    }
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  // ---------------------------------------------------------------------------
+  // MAIN GT6MODELS MODULE
+  // ---------------------------------------------------------------------------
+
   const GT6Models = {
     _textures: null,
+    _sharedCache: new WeakMap(),
 
     /**
-     * Build and cache high-resolution procedural canvas textures for all 3D models
+     * Get or create shared vehicle/wheel material cache per envMap to cut GPU shader compiles.
+     */
+    _getSharedMats(THREE, envMap) {
+      const key = envMap || THREE;
+      let cache = this._sharedCache.get(key);
+      if (cache) return cache;
+
+      const textures = this.getTextures();
+      cache = {
+        envMap,
+        tire: createStdMat(
+          THREE,
+          {
+            color: 0xffffff,
+            map: textures.tireTread || null,
+            roughness: 0.66,
+            metalness: 0.08
+          },
+          envMap
+        ),
+        policeRim: createStdMat(
+          THREE,
+          {
+            color: 0x1e232d,
+            metalness: 0.84,
+            roughness: 0.22
+          },
+          envMap
+        ),
+        trafficRim: createStdMat(
+          THREE,
+          {
+            color: 0xcbd5e1,
+            metalness: 0.88,
+            roughness: 0.18
+          },
+          envMap
+        ),
+        chrome: createStdMat(
+          THREE,
+          {
+            color: 0xe2e8f0,
+            metalness: 0.94,
+            roughness: 0.1,
+            envMapIntensity: 1.65
+          },
+          envMap
+        ),
+        blackPaint: createStdMat(
+          THREE,
+          {
+            color: 0x090b10,
+            metalness: 0.68,
+            roughness: 0.16,
+            envMapIntensity: 1.5
+          },
+          envMap
+        ),
+        swatBlack: createStdMat(
+          THREE,
+          {
+            color: 0x0c0e14,
+            metalness: 0.58,
+            roughness: 0.32,
+            envMapIntensity: 1.25
+          },
+          envMap
+        ),
+        policeDoor: createStdMat(
+          THREE,
+          {
+            color: 0xffffff,
+            map: textures.policeDoor || null,
+            metalness: 0.45,
+            roughness: 0.18,
+            envMapIntensity: 1.4
+          },
+          envMap
+        ),
+        swatDoor: createStdMat(
+          THREE,
+          {
+            color: 0xffffff,
+            map: textures.swatDoor || null,
+            metalness: 0.45,
+            roughness: 0.28,
+            envMapIntensity: 1.2
+          },
+          envMap
+        ),
+        darkGlass: createStdMat(
+          THREE,
+          {
+            color: 0x0a1220,
+            metalness: 0.94,
+            roughness: 0.06,
+            envMapIntensity: 1.8
+          },
+          envMap
+        ),
+        steel: createStdMat(
+          THREE,
+          {
+            color: 0x222834,
+            metalness: 0.82,
+            roughness: 0.24
+          },
+          envMap
+        ),
+        headlightEmissive: new THREE.MeshBasicMaterial({ color: 0xf8fafc }),
+        amberEmissive: new THREE.MeshBasicMaterial({ color: 0xff9900 }),
+        tailEmissive: new THREE.MeshBasicMaterial({ color: 0xff141e }),
+        whiteGlowSprite: textures.softGlow
+          ? new THREE.SpriteMaterial({
+              map: textures.softGlow,
+              color: 0xeef6ff,
+              transparent: true,
+              opacity: 0.55,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false
+            })
+          : null,
+        redGlowSprite: textures.softGlow
+          ? new THREE.SpriteMaterial({
+              map: textures.softGlow,
+              color: 0xff1722,
+              transparent: true,
+              opacity: 0.32,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false
+            })
+          : null,
+        blueGlowSprite: textures.softGlow
+          ? new THREE.SpriteMaterial({
+              map: textures.softGlow,
+              color: 0x0088ff,
+              transparent: true,
+              opacity: 0.32,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false
+            })
+          : null
+      };
+
+      this._sharedCache.set(key, cache);
+      return cache;
+    },
+
+    /**
+     * Build and cache high-resolution procedural canvas textures for all 3D models.
      */
     getTextures() {
       if (this._textures) return this._textures;
@@ -127,7 +1132,6 @@
 
       const textures = {};
 
-      // Helper to configure anisotropy & wrapping
       const finalizeTex = (canvas, repeatX = 1, repeatY = 1) => {
         const tex = new THREE.CanvasTexture(canvas);
         if (repeatX > 1 || repeatY > 1) {
@@ -135,154 +1139,142 @@
           tex.wrapT = THREE.RepeatWrapping;
           tex.repeat.set(repeatX, repeatY);
         }
-        tex.anisotropy = 8;
+        tex.anisotropy = 4;
         tex.needsUpdate = true;
         return tex;
       };
 
-      // 1. Realistic Black Rubber Fat-Tire Tread Diffuse & Bump Map (512x512)
+      // 0. Lightweight Radial Additive Glow Sprite Texture (128x128)
+      const glowCanvas = document.createElement('canvas');
+      glowCanvas.width = 128;
+      glowCanvas.height = 128;
+      const gctx = glowCanvas.getContext('2d');
+      if (gctx) {
+        const grad = gctx.createRadialGradient(64, 64, 2, 64, 64, 64);
+        grad.addColorStop(0, 'rgba(255,255,255,1.0)');
+        grad.addColorStop(0.25, 'rgba(255,255,255,0.65)');
+        grad.addColorStop(0.6, 'rgba(255,255,255,0.18)');
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        gctx.fillStyle = grad;
+        gctx.fillRect(0, 0, 128, 128);
+      }
+      textures.softGlow = finalizeTex(glowCanvas);
+
+      // 1. Realistic Black Rubber Fat-Tire Tread Map (256x256)
       const treadCanvas = document.createElement('canvas');
-      treadCanvas.width = 512;
-      treadCanvas.height = 512;
+      treadCanvas.width = 256;
+      treadCanvas.height = 256;
       const tctx = treadCanvas.getContext('2d');
       if (tctx) {
         tctx.fillStyle = '#141619';
-        tctx.fillRect(0, 0, 512, 512);
+        tctx.fillRect(0, 0, 256, 256);
 
-        // Circumferential drainage channels
         tctx.fillStyle = '#090a0c';
-        tctx.fillRect(150, 0, 14, 512);
-        tctx.fillRect(249, 0, 14, 512);
-        tctx.fillRect(348, 0, 14, 512);
+        tctx.fillRect(76, 0, 8, 256);
+        tctx.fillRect(124, 0, 8, 256);
+        tctx.fillRect(172, 0, 8, 256);
 
-        // Realistic V-pattern fat-tire street tread blocks
-        for (let y = -32; y < 544; y += 28) {
+        for (let y = -16; y < 272; y += 16) {
           tctx.strokeStyle = '#1f2329';
-          tctx.lineWidth = 13;
+          tctx.lineWidth = 7;
           tctx.lineCap = 'round';
           tctx.beginPath();
-          tctx.moveTo(24, y + 20);
-          tctx.lineTo(256, y);
-          tctx.lineTo(488, y + 20);
+          tctx.moveTo(26, y + 10);
+          tctx.lineTo(128, y);
+          tctx.lineTo(230, y + 10);
           tctx.stroke();
 
-          // Sipe groove shadow
           tctx.strokeStyle = '#08090b';
-          tctx.lineWidth = 6;
+          tctx.lineWidth = 3;
           tctx.beginPath();
-          tctx.moveTo(24, y + 29);
-          tctx.lineTo(256, y + 9);
-          tctx.lineTo(488, y + 29);
+          tctx.moveTo(26, y + 15);
+          tctx.lineTo(128, y + 5);
+          tctx.lineTo(230, y + 15);
           tctx.stroke();
         }
       }
       textures.tireTread = finalizeTex(treadCanvas, 1, 3);
       textures.tireBump = textures.tireTread;
 
-      // 2. Silver Cross-Drilled Metallic Brake Disc Texture (512x512)
+      // 2. Silver Cross-Drilled Metallic Brake Disc Texture (256x256)
       const discCanvas = document.createElement('canvas');
-      discCanvas.width = 512;
-      discCanvas.height = 512;
+      discCanvas.width = 256;
+      discCanvas.height = 256;
       const dctx = discCanvas.getContext('2d');
       if (dctx) {
-        dctx.clearRect(0, 0, 512, 512);
-        const cx = 256;
-        const cy = 256;
+        dctx.clearRect(0, 0, 256, 256);
+        const cx = 128;
+        const cy = 128;
 
-        // Outer stainless steel rotor ring
         dctx.fillStyle = '#d8e0ea';
         dctx.beginPath();
-        dctx.arc(cx, cy, 240, 0, Math.PI * 2);
+        dctx.arc(cx, cy, 120, 0, Math.PI * 2);
         dctx.fill();
 
-        // Brushed concentric rotor wear tracks
-        for (let r = 136; r < 236; r += 5) {
-          dctx.strokeStyle = r % 10 === 0 ? '#9aa6b5' : '#e2e8f0';
-          dctx.lineWidth = 2;
+        for (let r = 68; r < 118; r += 4) {
+          dctx.strokeStyle = r % 8 === 0 ? '#9aa6b5' : '#e2e8f0';
+          dctx.lineWidth = 1.5;
           dctx.beginPath();
           dctx.arc(cx, cy, r, 0, Math.PI * 2);
           dctx.stroke();
         }
 
-        // Inner dark carrier hub
         dctx.fillStyle = '#15181f';
         dctx.beginPath();
-        dctx.arc(cx, cy, 130, 0, Math.PI * 2);
+        dctx.arc(cx, cy, 65, 0, Math.PI * 2);
         dctx.fill();
 
-        // Silver carrier ring accent
-        dctx.strokeStyle = '#94a3b8';
-        dctx.lineWidth = 6;
-        dctx.beginPath();
-        dctx.arc(cx, cy, 124, 0, Math.PI * 2);
-        dctx.stroke();
-
-        // Cross-drilled ventilation holes
         dctx.fillStyle = '#090a0e';
-        for (let i = 0; i < 24; i++) {
-          const baseAngle = (i * Math.PI * 2) / 24;
-          [154, 186, 216].forEach((radius, idx) => {
-            const a = baseAngle + idx * 0.06;
+        for (let i = 0; i < 18; i++) {
+          const baseAngle = (i * Math.PI * 2) / 18;
+          [78, 94, 108].forEach((radius, idx) => {
+            const a = baseAngle + idx * 0.07;
             dctx.beginPath();
-            dctx.arc(cx + Math.cos(a) * radius, cy + Math.sin(a) * radius, 7, 0, Math.PI * 2);
+            dctx.arc(cx + Math.cos(a) * radius, cy + Math.sin(a) * radius, 3.5, 0, Math.PI * 2);
             dctx.fill();
           });
-        }
-
-        // Silver mounting bobbins
-        dctx.fillStyle = '#e2e8f0';
-        for (let i = 0; i < 10; i++) {
-          const a = (i * Math.PI * 2) / 10;
-          dctx.beginPath();
-          dctx.arc(cx + Math.cos(a) * 128, cy + Math.sin(a) * 128, 7.5, 0, Math.PI * 2);
-          dctx.fill();
         }
       }
       textures.discBrake = finalizeTex(discCanvas);
 
-      // 3. Front Swept Automotive Red Fender with White Lightning Bolt Decal (512x512)
+      // 3. Front Red Fender with White Lightning Bolt Decal (256x256)
       const fenderCanvas = document.createElement('canvas');
-      fenderCanvas.width = 512;
-      fenderCanvas.height = 512;
+      fenderCanvas.width = 256;
+      fenderCanvas.height = 256;
       const fctx = fenderCanvas.getContext('2d');
       if (fctx) {
         fctx.fillStyle = '#c4121a';
-        fctx.fillRect(0, 0, 512, 512);
-
-        // Crisp white side pinstripes & lightning bolt decal matching poster & video (0:00-0:03)
+        fctx.fillRect(0, 0, 256, 256);
         fctx.fillStyle = '#f8fafc';
-        fctx.fillRect(30, 0, 10, 512);
-        fctx.fillRect(472, 0, 10, 512);
-
+        fctx.fillRect(15, 0, 5, 256);
+        fctx.fillRect(236, 0, 5, 256);
         fctx.beginPath();
-        fctx.moveTo(274, 38);
-        fctx.lineTo(178, 240);
-        fctx.lineTo(252, 240);
-        fctx.lineTo(204, 472);
-        fctx.lineTo(338, 224);
-        fctx.lineTo(258, 224);
+        fctx.moveTo(137, 19);
+        fctx.lineTo(89, 120);
+        fctx.lineTo(126, 120);
+        fctx.lineTo(102, 236);
+        fctx.lineTo(169, 112);
+        fctx.lineTo(129, 112);
         fctx.closePath();
         fctx.fill();
       }
       textures.fenderLightning = finalizeTex(fenderCanvas);
 
-      // 4. Rear Automotive Red Fender with White Side Trim Stripe (512x512)
+      // 4. Rear Red Fender with White Side Trim (256x256)
       const rearFenderCanvas = document.createElement('canvas');
-      rearFenderCanvas.width = 512;
-      rearFenderCanvas.height = 512;
+      rearFenderCanvas.width = 256;
+      rearFenderCanvas.height = 256;
       const rfctx = rearFenderCanvas.getContext('2d');
       if (rfctx) {
         rfctx.fillStyle = '#c4121a';
-        rfctx.fillRect(0, 0, 512, 512);
-
-        // Clean white curved side trim stripes along fender edges (matching poster & 0:03-0:05)
+        rfctx.fillRect(0, 0, 256, 256);
         rfctx.fillStyle = '#f8fafc';
-        rfctx.fillRect(26, 36, 12, 440);
-        rfctx.fillRect(474, 36, 12, 440);
+        rfctx.fillRect(13, 18, 6, 220);
+        rfctx.fillRect(237, 18, 6, 220);
       }
       textures.rearFenderStripe = finalizeTex(rearFenderCanvas);
 
-      // 5. Glossy Black Under-Seat "EDTECH" Battery Box Texture (512x512 - NO sci-fi cyan bars)
+      // 5. Glossy Black Under-Seat "EDTECH" Battery Box Texture (512x512)
       const batCanvas = document.createElement('canvas');
       batCanvas.width = 512;
       batCanvas.height = 512;
@@ -290,328 +1282,400 @@
       if (bctx) {
         bctx.fillStyle = '#0b0d12';
         bctx.fillRect(0, 0, 512, 512);
-
-        // Subtle dark metallic panel bevel border
         bctx.strokeStyle = '#1f2430';
         bctx.lineWidth = 10;
         strokeRoundRect(bctx, 18, 18, 476, 476, 28);
-
-        // Top glossy automotive red trim edge under the seat
         bctx.fillStyle = '#c4121a';
         fillRoundRect(bctx, 24, 24, 464, 42, 12);
-
-        // Center White 8-Tooth Gear + Red/White "EDTECH" Logo (matching poster & video 0:00-0:04)
         drawEdtechGearLogo(bctx, 256, 268, 112, '#0b0d12', false);
       }
       textures.edtechBattery = finalizeTex(batCanvas);
 
-      // 6. Sleek Handlebar Digital Speedometer LCD Screen (512x256)
+      // 6. Digital Handlebar Speedometer LCD Screen (256x128)
       const dashCanvas = document.createElement('canvas');
-      dashCanvas.width = 512;
-      dashCanvas.height = 256;
+      dashCanvas.width = 256;
+      dashCanvas.height = 128;
       const dshCtx = dashCanvas.getContext('2d');
       if (dshCtx) {
         dshCtx.fillStyle = '#070a10';
-        dshCtx.fillRect(0, 0, 512, 256);
-
+        dshCtx.fillRect(0, 0, 256, 128);
         dshCtx.strokeStyle = '#262d3d';
-        dshCtx.lineWidth = 10;
-        strokeRoundRect(dshCtx, 8, 8, 496, 240, 22);
-
+        dshCtx.lineWidth = 5;
+        strokeRoundRect(dshCtx, 4, 4, 248, 120, 12);
         dshCtx.fillStyle = '#e2e8f0';
-        dshCtx.font = '900 72px "Arial Black", Impact, sans-serif';
+        dshCtx.font = '900 38px "Arial Black", Impact, sans-serif';
         dshCtx.textAlign = 'center';
         dshCtx.textBaseline = 'middle';
-        dshCtx.fillText('188', 256, 110);
-
+        dshCtx.fillText('188', 128, 55);
         dshCtx.fillStyle = '#60a5fa';
-        dshCtx.font = 'bold 26px Arial, sans-serif';
-        dshCtx.fillText('KM/H • EDTECH PT-13', 256, 188);
+        dshCtx.font = 'bold 14px Arial, sans-serif';
+        dshCtx.fillText('KM/H • EDTECH PT-13', 128, 94);
       }
       textures.digitalDash = finalizeTex(dashCanvas);
 
-      // 7. Rafa's Black Matte-Leather Jacket BACK Texture ("PT 13 / EDTECH" in crisp white - 0:05-0:07 in video!)
-      const jacketBackCanvas = document.createElement('canvas');
-      jacketBackCanvas.width = 512;
-      jacketBackCanvas.height = 512;
-      const jbctx = jacketBackCanvas.getContext('2d');
-      if (jbctx) {
-        // Rich dark matte-leather base
-        jbctx.fillStyle = '#111318';
-        jbctx.fillRect(0, 0, 512, 512);
+      // 7. Rafa's Unified Anatomical Leather Jacket Atlas (1024x512: Left Half=FRONT, Right Half=BACK)
+      // Plus backwards-compatible jacketFront & jacketBack textures (512x512 each)
+      const paintLeatherBase = (ctx, w, h) => {
+        ctx.fillStyle = '#12141a';
+        ctx.fillRect(0, 0, w, h);
 
-        // Subtle leather panel seams & shoulder yoke stitching
-        jbctx.strokeStyle = '#1e222b';
-        jbctx.lineWidth = 5;
-        strokeRoundRect(jbctx, 16, 16, 480, 480, 20);
-        jbctx.beginPath();
-        jbctx.moveTo(16, 118);
-        jbctx.quadraticCurveTo(256, 138, 496, 118);
-        jbctx.stroke();
+        // Subtle leather grain speckles & natural fold shading
+        for (let i = 0; i < (w * h) / 140; i++) {
+          const lx = (i * 73) % w;
+          const ly = (i * 139) % h;
+          ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.028)' : 'rgba(0,0,0,0.22)';
+          ctx.fillRect(lx, ly, 2, 2);
+        }
 
-        // Vertical side panel seams
-        jbctx.beginPath();
-        jbctx.moveTo(86, 122);
-        jbctx.lineTo(108, 496);
-        jbctx.moveTo(426, 122);
-        jbctx.lineTo(404, 496);
-        jbctx.stroke();
+        // Subtle shoulder-to-waist vertical fold highlights
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, 'rgba(255,255,255,0.05)');
+        grad.addColorStop(0.45, 'rgba(0,0,0,0.0)');
+        grad.addColorStop(1, 'rgba(0,0,0,0.28)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+      };
 
-        // Subtle dark embossed shadow for legibility
-        jbctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
-        jbctx.shadowBlur = 8;
-        jbctx.shadowOffsetY = 3;
+      const drawJacketFrontRegion = (ctx, ox) => {
+        // Subtle front leather folds & contoured chest panel seams
+        ctx.strokeStyle = '#1f242f';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(ox + 95, 110);
+        ctx.quadraticCurveTo(ox + 120, 290, ox + 135, 480);
+        ctx.moveTo(ox + 417, 110);
+        ctx.quadraticCurveTo(ox + 392, 290, ox + 377, 480);
+        ctx.stroke();
 
-        // Upper Back: Large Crisp White "PT 13" (matches 0:05-0:07 in video!)
-        jbctx.fillStyle = '#f8fafc';
-        jbctx.font = '900 104px "Arial Black", Impact, sans-serif';
-        jbctx.textAlign = 'center';
-        jbctx.textBaseline = 'middle';
-        jbctx.fillText('PT 13', 256, 195);
+        // Red contrast shoulder/chest piping (matching poster & 0:00-0:03)
+        ctx.strokeStyle = '#b91c24';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(ox + 18, 108);
+        ctx.quadraticCurveTo(ox + 256, 126, ox + 494, 108);
+        ctx.stroke();
 
-        // Right below "PT 13": Crisp White "EDTECH" + subtle gear crest (matches 0:05-0:07 in video!)
-        jbctx.font = '900 62px "Arial Black", Impact, sans-serif';
-        jbctx.fillStyle = '#f1f5f9';
-        jbctx.fillText('EDTECH', 256, 286);
-        jbctx.shadowBlur = 0;
-        jbctx.shadowOffsetY = 0;
+        // Folded leather collar lapels flanking the zipper
+        ctx.fillStyle = '#181b23';
+        ctx.beginPath();
+        ctx.moveTo(ox + 216, 40);
+        ctx.lineTo(ox + 252, 118);
+        ctx.lineTo(ox + 252, 40);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(ox + 296, 40);
+        ctx.lineTo(ox + 260, 118);
+        ctx.lineTo(ox + 260, 40);
+        ctx.closePath();
+        ctx.fill();
 
-        // Subtle lower-back EDTECH mechanical gear emblem
-        drawEdtechGearLogo(jbctx, 256, 396, 56, '#111318', false);
+        // Metallic center zipper track
+        ctx.fillStyle = '#252a35';
+        ctx.fillRect(ox + 249, 44, 14, 446);
+        ctx.fillStyle = '#94a3b8';
+        for (let zy = 52; zy < 484; zy += 10) {
+          ctx.fillRect(ox + 252, zy, 8, 5);
+        }
+
+        // Chest pockets & red snap trim
+        ctx.strokeStyle = '#1f232d';
+        ctx.lineWidth = 3;
+        strokeRoundRect(ctx, ox + 92, 232, 130, 116, 8);
+        strokeRoundRect(ctx, ox + 290, 232, 130, 116, 8);
+        ctx.strokeStyle = '#991b1b';
+        strokeRoundRect(ctx, ox + 92, 228, 130, 32, 5);
+        strokeRoundRect(ctx, ox + 290, 228, 130, 32, 5);
+
+        ctx.fillStyle = '#cbd5e1';
+        ctx.beginPath();
+        ctx.arc(ox + 157, 246, 5.5, 0, Math.PI * 2);
+        ctx.arc(ox + 355, 246, 5.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // RIGHT CHEST (viewer left): Red "PT 13" Patch
+        ctx.fillStyle = '#c4121a';
+        fillRoundRect(ctx, ox + 96, 144, 122, 52, 7);
+        ctx.strokeStyle = '#f8fafc';
+        ctx.lineWidth = 2.5;
+        strokeRoundRect(ctx, ox + 100, 148, 114, 44, 5);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 32px "Arial Black", Impact, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('PT 13', ox + 157, 171);
+
+        // LEFT CHEST (viewer right): White 8-Tooth Gear + "EDTECH" Logo
+        drawEdtechGearLogo(ctx, ox + 355, 168, 36, '#12141a', false);
+
+        // Waist belt & silver buckle
+        ctx.fillStyle = '#090a0f';
+        ctx.fillRect(ox + 16, 444, 480, 44);
+        ctx.fillStyle = '#94a3b8';
+        strokeRoundRect(ctx, ox + 236, 448, 40, 34, 4);
+      };
+
+      const drawJacketBackRegion = (ctx, ox) => {
+        // Upper back shoulder yoke & natural fabric creases
+        ctx.strokeStyle = '#212633';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(ox + 24, 78);
+        ctx.quadraticCurveTo(ox + 256, 98, ox + 488, 78);
+        ctx.stroke();
+
+        // Subtle red stitching along yoke
+        ctx.strokeStyle = '#8b151b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(ox + 24, 83);
+        ctx.quadraticCurveTo(ox + 256, 103, ox + 488, 83);
+        ctx.stroke();
+
+        // Side waist taper seams & subtle spine fold shading
+        ctx.strokeStyle = '#1b1f29';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(ox + 96, 86);
+        ctx.quadraticCurveTo(ox + 124, 270, ox + 132, 444);
+        ctx.moveTo(ox + 416, 86);
+        ctx.quadraticCurveTo(ox + 388, 270, ox + 380, 444);
+        ctx.stroke();
+
+        // Subtle diagonal riding-crease shadows across lower back
+        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(ox + 165, 360);
+        ctx.quadraticCurveTo(ox + 256, 376, ox + 347, 360);
+        ctx.moveTo(ox + 150, 405);
+        ctx.quadraticCurveTo(ox + 256, 422, ox + 362, 405);
+        ctx.stroke();
+
+        // Upper Back: Crisp White "PT 13" over "EDTECH" placed high between shoulder blades above backrest!
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+        ctx.shadowBlur = 7;
+        ctx.shadowOffsetY = 2;
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '900 84px "Arial Black", Impact, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('PT 13', ox + 256, 134);
+
+        ctx.font = '900 48px "Arial Black", Impact, sans-serif';
+        ctx.fillStyle = '#f1f5f9';
+        ctx.fillText('EDTECH', ox + 256, 202);
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+
+        drawEdtechGearLogo(ctx, ox + 256, 282, 36, '#12141a', false);
+
+        // Rear leather belt hem
+        ctx.fillStyle = '#090a0f';
+        ctx.fillRect(ox + 16, 444, 480, 44);
+      };
+
+      const atlasCanvas = document.createElement('canvas');
+      atlasCanvas.width = 1024;
+      atlasCanvas.height = 512;
+      const actx = atlasCanvas.getContext('2d');
+      if (actx) {
+        paintLeatherBase(actx, 1024, 512);
+        drawJacketFrontRegion(actx, 0);
+        drawJacketBackRegion(actx, 512);
       }
-      textures.jacketBack = finalizeTex(jacketBackCanvas);
+      textures.jacketAtlas = finalizeTex(atlasCanvas);
 
-      // 8. Rafa's Black Matte-Leather Jacket FRONT Chest Texture (Red "PT 13" right chest patch + "EDTECH" left chest gear logo - 0:00-0:03 & poster!)
       const jacketFrontCanvas = document.createElement('canvas');
       jacketFrontCanvas.width = 512;
       jacketFrontCanvas.height = 512;
       const jfctx = jacketFrontCanvas.getContext('2d');
       if (jfctx) {
-        jfctx.fillStyle = '#111318';
-        jfctx.fillRect(0, 0, 512, 512);
-
-        // Subtle red leather piping along shoulder yoke & chest seams (matching poster & 0:00-0:03)
-        jfctx.strokeStyle = '#b91c24';
-        jfctx.lineWidth = 5;
-        jfctx.beginPath();
-        jfctx.moveTo(16, 108);
-        jfctx.lineTo(496, 108);
-        jfctx.stroke();
-
-        // Center metallic zipper track
-        jfctx.fillStyle = '#262b36';
-        jfctx.fillRect(248, 0, 16, 512);
-        jfctx.fillStyle = '#94a3b8';
-        for (let zy = 8; zy < 504; zy += 10) {
-          jfctx.fillRect(251, zy, 10, 5);
-        }
-
-        // Chest pocket flaps & seams below the logos
-        jfctx.strokeStyle = '#1f232d';
-        jfctx.lineWidth = 4;
-        strokeRoundRect(jfctx, 44, 240, 174, 150, 10);
-        strokeRoundRect(jfctx, 294, 240, 174, 150, 10);
-        jfctx.strokeStyle = '#991b1b';
-        jfctx.lineWidth = 3;
-        strokeRoundRect(jfctx, 44, 236, 174, 38, 6);
-        strokeRoundRect(jfctx, 294, 236, 174, 38, 6);
-
-        // Silver snap buttons on chest pockets
-        jfctx.fillStyle = '#cbd5e1';
-        jfctx.beginPath();
-        jfctx.arc(131, 258, 7, 0, Math.PI * 2);
-        jfctx.arc(381, 258, 7, 0, Math.PI * 2);
-        jfctx.fill();
-
-        // RIGHT CHEST (viewer left, x = 44..220): Red "PT 13" Patch (matching 0:00-0:03 & poster!)
-        jfctx.fillStyle = '#c4121a';
-        fillRoundRect(jfctx, 46, 146, 170, 68, 8);
-        jfctx.strokeStyle = '#f8fafc';
-        jfctx.lineWidth = 3;
-        strokeRoundRect(jfctx, 51, 151, 160, 58, 6);
-        jfctx.fillStyle = '#ffffff';
-        jfctx.font = '900 44px "Arial Black", Impact, sans-serif';
-        jfctx.textAlign = 'center';
-        jfctx.textBaseline = 'middle';
-        jfctx.fillText('PT 13', 131, 182);
-
-        // LEFT CHEST (viewer right, x = 292..468): White 8-Tooth Gear + "EDTECH" Logo (matching 0:00-0:03 & poster!)
-        drawEdtechGearLogo(jfctx, 381, 176, 48, '#111318', false);
+        paintLeatherBase(jfctx, 512, 512);
+        drawJacketFrontRegion(jfctx, 0);
       }
       textures.jacketFront = finalizeTex(jacketFrontCanvas);
 
-      // 9. Round Multi-LED Halo Headlight Internal Reflector Face Texture (512x512 - matches 0:00-0:04 & poster)
+      const jacketBackCanvas = document.createElement('canvas');
+      jacketBackCanvas.width = 512;
+      jacketBackCanvas.height = 512;
+      const jbctx = jacketBackCanvas.getContext('2d');
+      if (jbctx) {
+        paintLeatherBase(jbctx, 512, 512);
+        drawJacketBackRegion(jbctx, 0);
+      }
+      textures.jacketBack = finalizeTex(jacketBackCanvas);
+
+      // 8. Round Multi-LED Halo Headlight Reflector Face (256x256)
       const hlCanvas = document.createElement('canvas');
-      hlCanvas.width = 512;
-      hlCanvas.height = 512;
+      hlCanvas.width = 256;
+      hlCanvas.height = 256;
       const hctx = hlCanvas.getContext('2d');
       if (hctx) {
         hctx.fillStyle = '#090b10';
-        hctx.fillRect(0, 0, 512, 512);
-        const cx = 256;
-        const cy = 256;
+        hctx.fillRect(0, 0, 256, 256);
+        const cx = 128;
+        const cy = 128;
 
-        // Dark metallic reflector bowl
-        const bowlGrad = hctx.createRadialGradient(cx, cy, 20, cx, cy, 240);
+        const bowlGrad = hctx.createRadialGradient(cx, cy, 10, cx, cy, 120);
         bowlGrad.addColorStop(0, '#1e2430');
         bowlGrad.addColorStop(0.75, '#0d1017');
         bowlGrad.addColorStop(1, '#050608');
         hctx.fillStyle = bowlGrad;
         hctx.beginPath();
-        hctx.arc(cx, cy, 240, 0, Math.PI * 2);
+        hctx.arc(cx, cy, 120, 0, Math.PI * 2);
         hctx.fill();
 
-        // Outer glowing Angel-Eye Halo Ring (warm/cool white LED tube)
         hctx.strokeStyle = '#f8fafc';
-        hctx.lineWidth = 26;
-        hctx.shadowColor = '#e0f2fe';
-        hctx.shadowBlur = 18;
+        hctx.lineWidth = 13;
         hctx.beginPath();
-        hctx.arc(cx, cy, 208, 0, Math.PI * 2);
+        hctx.arc(cx, cy, 104, 0, Math.PI * 2);
         hctx.stroke();
-        hctx.shadowBlur = 0;
 
-        // Horizontal chrome divider bars for the dual-row multi-LED projector array
         hctx.fillStyle = '#94a3b8';
-        fillRoundRect(hctx, 88, 152, 336, 82, 40);
-        fillRoundRect(hctx, 104, 278, 304, 78, 38);
-
+        fillRoundRect(hctx, 44, 76, 168, 41, 20);
+        fillRoundRect(hctx, 52, 139, 152, 39, 19);
         hctx.fillStyle = '#0f131a';
-        fillRoundRect(hctx, 96, 158, 320, 70, 34);
-        fillRoundRect(hctx, 112, 284, 288, 66, 32);
+        fillRoundRect(hctx, 48, 79, 160, 35, 17);
+        fillRoundRect(hctx, 56, 142, 144, 33, 16);
 
-        // Top row of 4 bright LED projector emitters & bottom row of 3 bright LED emitters
-        const topXs = [142, 218, 294, 370];
-        topXs.forEach((lx) => {
-          const g = hctx.createRadialGradient(lx, 193, 4, lx, 193, 30);
+        [71, 109, 147, 185].forEach((lx) => {
+          const g = hctx.createRadialGradient(lx, 96, 2, lx, 96, 15);
           g.addColorStop(0, '#ffffff');
-          g.addColorStop(0.55, '#fffbeb');
+          g.addColorStop(0.6, '#fffbeb');
           g.addColorStop(1, 'rgba(224, 242, 254, 0)');
           hctx.fillStyle = g;
           hctx.beginPath();
-          hctx.arc(lx, 193, 30, 0, Math.PI * 2);
+          hctx.arc(lx, 96, 15, 0, Math.PI * 2);
           hctx.fill();
         });
-
-        const botXs = [168, 256, 344];
-        botXs.forEach((lx) => {
-          const g = hctx.createRadialGradient(lx, 317, 4, lx, 317, 28);
+        [84, 128, 172].forEach((lx) => {
+          const g = hctx.createRadialGradient(lx, 158, 2, lx, 158, 14);
           g.addColorStop(0, '#ffffff');
-          g.addColorStop(0.55, '#e0f2fe');
+          g.addColorStop(0.6, '#e0f2fe');
           g.addColorStop(1, 'rgba(224, 242, 254, 0)');
           hctx.fillStyle = g;
           hctx.beginPath();
-          hctx.arc(lx, 317, 28, 0, Math.PI * 2);
+          hctx.arc(lx, 158, 14, 0, Math.PI * 2);
           hctx.fill();
         });
       }
       textures.headlightFace = finalizeTex(hlCanvas);
 
-      // 10. Realistic Black-and-White Police Sedan Side Livery ("POLICE" - matches 0:02-0:09 in video!)
+      // 9. Police Interceptor Side Livery Mapped to Extruded Fastback Profile (512x256)
+      // v=0..1 maps y=0.18..1.49 (y=0.88..1.38 is side windows -> canvas y=22..118)
+      // u=0..1 maps z=-2.31..+2.31 (symmetric white doors in center x=142..370!)
       const policeCanvas = document.createElement('canvas');
       policeCanvas.width = 512;
       policeCanvas.height = 256;
       const pctx = policeCanvas.getContext('2d');
       if (pctx) {
-        // Deep glossy black front fender & rear quarter panel
+        // Glossy black base (front fender, hood, rear quarter, pillars, roof)
         pctx.fillStyle = '#090b10';
         pctx.fillRect(0, 0, 512, 256);
 
-        // Crisp white front & rear doors in center section
+        // Crisp white front & rear doors across symmetric middle
         pctx.fillStyle = '#f8fafc';
-        pctx.fillRect(104, 0, 304, 232);
+        pctx.fillRect(142, 114, 228, 124);
 
-        // Lower black rocker sill
+        // Dark tinted side window band along upper greenhouse
+        pctx.fillStyle = '#0c1524';
+        fillRoundRect(pctx, 134, 26, 244, 82, 16);
+
+        // Glossy black B-pillar & door divider seam
         pctx.fillStyle = '#090b10';
-        pctx.fillRect(0, 224, 512, 32);
-
-        // Subtle door seam line & door handles
+        pctx.fillRect(248, 20, 16, 94);
         pctx.strokeStyle = '#cbd5e1';
-        pctx.lineWidth = 3;
+        pctx.lineWidth = 2.5;
         pctx.beginPath();
-        pctx.moveTo(256, 8);
-        pctx.lineTo(256, 224);
+        pctx.moveTo(256, 116);
+        pctx.lineTo(256, 236);
         pctx.stroke();
 
-        // Silver/Gold Police Shield Badge on front fender/door
+        // Subtle chrome door handles
+        pctx.fillStyle = '#64748b';
+        fillRoundRect(pctx, 218, 130, 22, 6, 3);
+        fillRoundRect(pctx, 324, 130, 22, 6, 3);
+
+        // Gold VCPD Police Shield Emblem on doors
         pctx.fillStyle = '#eab308';
         pctx.beginPath();
-        pctx.arc(62, 96, 26, 0, Math.PI * 2);
+        pctx.arc(166, 146, 14, 0, Math.PI * 2);
         pctx.fill();
-        pctx.strokeStyle = '#fef08a';
-        pctx.lineWidth = 3;
-        pctx.stroke();
 
-        // Bold Black "POLICE" block lettering across the white doors (matching 0:03-0:09 in video!)
+        // Bold Black "POLICE" lettering across white doors
         pctx.fillStyle = '#090b10';
-        pctx.font = '900 76px "Arial Black", Impact, sans-serif';
+        pctx.font = '900 54px "Arial Black", Impact, sans-serif';
         pctx.textAlign = 'center';
         pctx.textBaseline = 'middle';
-        pctx.fillText('POLICE', 256, 108);
+        pctx.fillText('POLICE', 256, 168);
 
-        // Crisp dark sub-label
         pctx.fillStyle = '#1e293b';
-        pctx.font = 'bold 20px Arial, sans-serif';
-        pctx.fillText('INTERCEPTOR • 911', 256, 168);
+        pctx.font = 'bold 14px Arial, sans-serif';
+        pctx.fillText('VCPD INTERCEPTOR • 911', 256, 208);
       }
       textures.policeDoor = finalizeTex(policeCanvas);
 
-      // 11. SWAT Tactical BearCat Side Decal (512x256)
+      // 10. SWAT Tactical BearCat Side Livery (512x256)
       const swatCanvas = document.createElement('canvas');
       swatCanvas.width = 512;
       swatCanvas.height = 256;
       const sctx = swatCanvas.getContext('2d');
       if (sctx) {
-        sctx.fillStyle = '#090b10';
+        sctx.fillStyle = '#0c0e14';
         sctx.fillRect(0, 0, 512, 256);
 
+        // Armored side viewports
+        sctx.fillStyle = '#0b1422';
+        fillRoundRect(sctx, 152, 28, 72, 66, 8);
+        fillRoundRect(sctx, 260, 42, 46, 36, 5);
+        fillRoundRect(sctx, 332, 42, 46, 36, 5);
+
         sctx.fillStyle = '#f1f5f9';
-        sctx.font = '900 78px "Arial Black", Impact, sans-serif';
+        sctx.font = '900 64px "Arial Black", Impact, sans-serif';
         sctx.textAlign = 'center';
         sctx.textBaseline = 'middle';
-        sctx.fillText('POLICE', 256, 98);
+        sctx.fillText('POLICE', 256, 142);
 
         sctx.fillStyle = '#94a3b8';
-        sctx.font = 'bold 24px Arial, sans-serif';
-        sctx.fillText('S.W.A.T. TACTICAL UNIT', 256, 158);
+        sctx.font = 'bold 20px Arial, sans-serif';
+        sctx.fillText('S.W.A.T. TACTICAL UNIT', 256, 192);
       }
       textures.swatDoor = finalizeTex(swatCanvas);
 
-      // 12. Helicopter Translucent Motion-Blur Rotor Disc Texture (512x512)
+      // 11. Helicopter Motion-Blur Rotor Disc (256x256)
       const rotorCanvas = document.createElement('canvas');
-      rotorCanvas.width = 512;
-      rotorCanvas.height = 512;
+      rotorCanvas.width = 256;
+      rotorCanvas.height = 256;
       const rctx = rotorCanvas.getContext('2d');
       if (rctx) {
-        rctx.clearRect(0, 0, 512, 512);
-        const cx = 256;
-        const cy = 256;
+        rctx.clearRect(0, 0, 256, 256);
+        const cx = 128;
+        const cy = 128;
 
-        // Soft motion-blur disc wash
-        const discGrad = rctx.createRadialGradient(cx, cy, 18, cx, cy, 248);
-        discGrad.addColorStop(0, 'rgba(148, 163, 184, 0.25)');
+        const discGrad = rctx.createRadialGradient(cx, cy, 9, cx, cy, 124);
+        discGrad.addColorStop(0, 'rgba(148, 163, 184, 0.24)');
         discGrad.addColorStop(0.7, 'rgba(203, 213, 225, 0.14)');
         discGrad.addColorStop(0.95, 'rgba(241, 245, 249, 0.28)');
         discGrad.addColorStop(1, 'rgba(241, 245, 249, 0)');
         rctx.fillStyle = discGrad;
         rctx.beginPath();
-        rctx.arc(cx, cy, 248, 0, Math.PI * 2);
+        rctx.arc(cx, cy, 124, 0, Math.PI * 2);
         rctx.fill();
 
-        // Outer rotor tip ring
-        rctx.strokeStyle = 'rgba(226, 232, 240, 0.32)';
-        rctx.lineWidth = 6;
+        rctx.strokeStyle = 'rgba(226, 232, 240, 0.30)';
+        rctx.lineWidth = 3;
         rctx.beginPath();
-        rctx.arc(cx, cy, 242, 0, Math.PI * 2);
+        rctx.arc(cx, cy, 121, 0, Math.PI * 2);
         rctx.stroke();
 
-        // 4 Swept blade blur wedges
         for (let i = 0; i < 4; i++) {
           const a = (i * Math.PI) / 2;
           rctx.fillStyle = 'rgba(203, 213, 225, 0.18)';
           rctx.beginPath();
           rctx.moveTo(cx, cy);
-          rctx.arc(cx, cy, 244, a - 0.2, a + 0.2);
+          rctx.arc(cx, cy, 122, a - 0.2, a + 0.2);
           rctx.closePath();
           rctx.fill();
         }
@@ -623,98 +1687,72 @@
     },
 
     /**
-     * Build a High-Polygon Realistic Fat-Tire Chopper Wheel Assembly
-     * Wide black rubber fat tire (#141619, roughness 0.65), rounded sidewalls,
-     * satin-black deep-dish alloy rim, and silver cross-drilled disc brake rotor
+     * Build a Smooth Rounded LatheGeometry Fat-Tire Chopper Wheel (ONLY 3 draw calls per wheel!).
      */
     _buildFatChopperWheel(isFront, mats, textures) {
       const THREE = window.THREE;
       const wheelGroup = new THREE.Group();
 
-      const tireMat = createPBRMaterial(
+      const width = isFront ? 0.44 : 0.52;
+      const hw = width * 0.5;
+      const outerR = 0.44;
+      const rimR = 0.255;
+
+      // 1. Sculpted Rounded Fat-Tire Profile via LatheGeometry (1 seamless organic mesh)
+      // Profile revolves around +Y in LatheGeometry, then rotated Z=PI/2 to align axle with X
+      const profile = [
+        new THREE.Vector2(rimR, -hw * 0.86),
+        new THREE.Vector2(rimR + 0.055, -hw * 0.99),
+        new THREE.Vector2(outerR - 0.08, -hw * 1.04),
+        new THREE.Vector2(outerR - 0.02, -hw * 0.82),
+        new THREE.Vector2(outerR, -hw * 0.45),
+        new THREE.Vector2(outerR + 0.004, 0),
+        new THREE.Vector2(outerR, hw * 0.45),
+        new THREE.Vector2(outerR - 0.02, hw * 0.82),
+        new THREE.Vector2(outerR - 0.08, hw * 1.04),
+        new THREE.Vector2(rimR + 0.055, hw * 0.99),
+        new THREE.Vector2(rimR, hw * 0.86)
+      ];
+      const tireGeo = bakeGeo(new THREE.LatheGeometry(profile, 28), 0, 0, 0, 0, 0, Math.PI / 2);
+      const tireMat = createStdMat(
         THREE,
         {
           color: 0xffffff,
           map: textures.tireTread || null,
-          bumpMap: textures.tireBump || null,
-          bumpScale: 0.03,
           roughness: 0.65,
           metalness: 0.08
         },
         mats.envMap
       );
+      const tireMesh = new THREE.Mesh(tireGeo, tireMat);
+      wheelGroup.add(tireMesh);
 
-      const sidewallMat = createPBRMaterial(
-        THREE,
-        {
-          color: 0x141619,
-          roughness: 0.65,
-          metalness: 0.08
-        },
-        mats.envMap
-      );
-
-      // 1. Extra-Wide Fat Tire Center Tread Cylinder (36 radial segments)
-      const width = isFront ? 0.44 : 0.52;
-      const radius = 0.44;
-      const treadCyl = new THREE.Mesh(
-        new THREE.CylinderGeometry(radius, radius, width, 36, 1, false),
-        tireMat
-      );
-      treadCyl.rotation.z = Math.PI / 2;
-      treadCyl.castShadow = true;
-      treadCyl.receiveShadow = true;
-      wheelGroup.add(treadCyl);
-
-      // 2. Dual Rounded Tire Sidewall Toruses (36 tubular segments)
-      const sideOffset = width * 0.45;
-      [-sideOffset, sideOffset].forEach((sx) => {
-        const sidewall = new THREE.Mesh(
-          new THREE.TorusGeometry(radius - 0.085, 0.092, 18, 36),
-          sidewallMat
-        );
-        sidewall.rotation.y = Math.PI / 2;
-        sidewall.position.x = sx;
-        wheelGroup.add(sidewall);
-
-        // Satin-black deep-dish alloy rim lip with subtle machined edge
-        const rimLip = new THREE.Mesh(
-          new THREE.TorusGeometry(0.268, 0.018, 14, 32),
-          mats.darkAlloy
-        );
-        rimLip.rotation.y = Math.PI / 2;
-        rimLip.position.x = sx * 1.02;
-        wheelGroup.add(rimLip);
-      });
-
-      // 3. Deep-Dish Satin Black Alloy Wheel Barrel (32 segments)
-      const barrel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.265, 0.265, width + 0.02, 32),
-        mats.darkAlloy
-      );
-      barrel.rotation.z = Math.PI / 2;
-      wheelGroup.add(barrel);
-
-      // 4. Five-Spoke Heavy Alloy Wheel Hub + Center Axle Cap
+      // 2. Merged Alloy Rim Barrel + 5 Sculpted Spokes + Center Hub (1 draw call!)
+      const rimParts = [
+        bakeGeo(new THREE.CylinderGeometry(rimR + 0.008, rimR + 0.008, width * 0.9, 24), 0, 0, 0, 0, 0, Math.PI / 2),
+        bakeGeo(new THREE.CylinderGeometry(0.082, 0.082, width + 0.06, 16), 0, 0, 0, 0, 0, Math.PI / 2)
+      ];
       for (let i = 0; i < 5; i++) {
         const angle = (i * Math.PI * 2) / 5;
-        const spoke = new THREE.Mesh(
-          new THREE.BoxGeometry(width * 0.86, 0.055, 0.25),
-          mats.darkAlloy
+        const spoke = bakeGeo(
+          new THREE.CylinderGeometry(0.032, 0.044, rimR * 1.85, 8),
+          0,
+          0,
+          0,
+          angle,
+          0,
+          0,
+          1.4,
+          1.0,
+          0.7
         );
-        spoke.rotation.x = angle;
-        wheelGroup.add(spoke);
+        rimParts.push(spoke);
       }
+      const rimMesh = new THREE.Mesh(mergeGeometries(THREE, rimParts), mats.darkAlloy);
+      wheelGroup.add(rimMesh);
 
-      const centerHub = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.08, width + 0.07, 24),
-        mats.chrome
-      );
-      centerHub.rotation.z = Math.PI / 2;
-      wheelGroup.add(centerHub);
-
-      // 5. Silver Cross-Drilled Metallic Brake Disc Rotor
-      const rotorMat = createPBRMaterial(
+      // 3. Silver Cross-Drilled Brake Disc Rotor
+      const rotorMat = createStdMat(
         THREE,
         {
           color: 0xffffff,
@@ -726,21 +1764,74 @@
         },
         mats.envMap
       );
-      const rotorSideX = isFront ? -(width * 0.54) : width * 0.54;
-      const rotorMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.31, 0.31, 0.016, 32),
-        rotorMat
+      const rotorSideX = isFront ? -(width * 0.53) : width * 0.53;
+      const rotorGeo = bakeGeo(
+        new THREE.CylinderGeometry(0.30, 0.30, 0.015, 24),
+        rotorSideX,
+        0,
+        0,
+        0,
+        0,
+        Math.PI / 2
       );
-      rotorMesh.rotation.z = Math.PI / 2;
-      rotorMesh.position.x = rotorSideX;
-      wheelGroup.add(rotorMesh);
+      wheelGroup.add(new THREE.Mesh(rotorGeo, rotorMat));
 
       return wheelGroup;
     },
 
     /**
+     * Build a Low-Draw-Call Rounded Car Wheel (ONLY 2 draw calls per wheel: Tire + Merged Rim/Spokes!).
+     */
+    _buildCarWheel(radius, width, envMap, isPolice) {
+      const THREE = window.THREE;
+      const shared = this._getSharedMats(THREE, envMap);
+      const wheel = new THREE.Group();
+
+      const hw = width * 0.5;
+      const rimR = radius * 0.64;
+
+      // 1. Rounded LatheGeometry Car Tire
+      const profile = [
+        new THREE.Vector2(rimR, -hw * 0.88),
+        new THREE.Vector2(radius * 0.82, -hw * 1.02),
+        new THREE.Vector2(radius * 0.98, -hw * 0.84),
+        new THREE.Vector2(radius, 0),
+        new THREE.Vector2(radius * 0.98, hw * 0.84),
+        new THREE.Vector2(radius * 0.82, hw * 1.02),
+        new THREE.Vector2(rimR, hw * 0.88)
+      ];
+      const tireGeo = bakeGeo(new THREE.LatheGeometry(profile, 22), 0, 0, 0, 0, 0, Math.PI / 2);
+      wheel.add(new THREE.Mesh(tireGeo, shared.tire));
+
+      // 2. Merged Alloy Rim + 5 Spokes + Center Hubcap (1 draw call!)
+      const rimParts = [
+        bakeGeo(new THREE.CylinderGeometry(rimR + 0.006, rimR + 0.006, width * 0.96, 18), 0, 0, 0, 0, 0, Math.PI / 2),
+        bakeGeo(new THREE.CylinderGeometry(radius * 0.22, radius * 0.22, width + 0.03, 12), 0, 0, 0, 0, 0, Math.PI / 2)
+      ];
+      for (let s = 0; s < 5; s++) {
+        const spoke = bakeGeo(
+          new THREE.CylinderGeometry(0.022, 0.032, rimR * 1.88, 6),
+          0,
+          0,
+          0,
+          (s * Math.PI * 2) / 5,
+          0,
+          0,
+          1.6,
+          1.0,
+          0.65
+        );
+        rimParts.push(spoke);
+      }
+      const rimMat = isPolice ? shared.policeRim : shared.trafficRim;
+      wheel.add(new THREE.Mesh(mergeGeometries(THREE, rimParts), rimMat));
+
+      return wheel;
+    },
+
+    /**
      * 1. Build Rafa & His Red Fat-Tire Electric Chopper (EDTECH / PT 13)
-     * Faithful to the reference video (0:00-0:09) and poster (assets/rafa-poster.jpg).
+     * Ultra-lean draw-call budget (~30 meshes total) with realistic organic human anatomy.
      * @param {THREE.Texture} envMap
      * @returns {{ group: THREE.Group, refs: Object }}
      */
@@ -750,113 +1841,96 @@
       const group = new THREE.Group();
       group.name = 'RafaAndChopperGroup';
 
-      // Shared Physically-Based Materials
       const mats = {
         envMap,
-        // Deep glossy automotive red (#c4121a) for tubular frame & fenders
-        candyRed: createPBRMaterial(
+        candyRed: createStdMat(
           THREE,
           {
             color: 0xc4121a,
-            emissive: 0x1a0103,
-            metalness: 0.55,
-            roughness: 0.16,
-            clearcoat: 1.0,
-            clearcoatRoughness: 0.06,
-            envMapIntensity: 1.45
+            emissive: 0x160103,
+            metalness: 0.62,
+            roughness: 0.17,
+            envMapIntensity: 1.5
           },
           envMap
         ),
-        fenderLightning: createPBRMaterial(
+        fenderLightning: createStdMat(
           THREE,
           {
             color: 0xffffff,
             map: textures.fenderLightning || null,
-            metalness: 0.55,
-            roughness: 0.16,
-            clearcoat: 1.0,
-            clearcoatRoughness: 0.06,
-            envMapIntensity: 1.45
+            metalness: 0.58,
+            roughness: 0.17,
+            envMapIntensity: 1.5
           },
           envMap
         ),
-        rearFenderMat: createPBRMaterial(
+        rearFenderMat: createStdMat(
           THREE,
           {
             color: 0xffffff,
             map: textures.rearFenderStripe || null,
-            metalness: 0.55,
-            roughness: 0.16,
-            clearcoat: 1.0,
-            clearcoatRoughness: 0.06,
-            envMapIntensity: 1.45
+            metalness: 0.58,
+            roughness: 0.17,
+            envMapIntensity: 1.5
           },
           envMap
         ),
-        chrome: createPBRMaterial(
+        chrome: createStdMat(
           THREE,
           {
             color: 0xe2e8f0,
             metalness: 0.94,
-            roughness: 0.09,
-            clearcoat: 1.0,
-            clearcoatRoughness: 0.05,
+            roughness: 0.1,
             envMapIntensity: 1.65
           },
           envMap
         ),
-        // Satin/gloss black steel for handlebars, lower forks, mirrors, sissy bar & frame hardware
-        blackSteel: createPBRMaterial(
+        blackSteel: createStdMat(
           THREE,
           {
             color: 0x12141a,
-            metalness: 0.68,
-            roughness: 0.24,
-            clearcoat: 0.65,
-            clearcoatRoughness: 0.18,
+            metalness: 0.66,
+            roughness: 0.25,
             envMapIntensity: 1.25
           },
           envMap
         ),
-        darkAlloy: createPBRMaterial(
+        darkAlloy: createStdMat(
           THREE,
           {
-            color: 0x151820,
-            metalness: 0.72,
-            roughness: 0.28,
-            envMapIntensity: 1.2
+            color: 0x171a22,
+            metalness: 0.76,
+            roughness: 0.26,
+            envMapIntensity: 1.25
           },
           envMap
         ),
-        rubber: createPBRMaterial(
+        rubber: createStdMat(
           THREE,
           {
             color: 0x141619,
-            metalness: 0.08,
-            roughness: 0.65
+            metalness: 0.06,
+            roughness: 0.7
           },
           envMap
         ),
-        stitchedLeather: createPBRMaterial(
+        stitchedLeather: createStdMat(
           THREE,
           {
             color: 0x14161d,
-            metalness: 0.12,
-            roughness: 0.46,
-            clearcoat: 0.2,
-            clearcoatRoughness: 0.45
+            metalness: 0.1,
+            roughness: 0.46
           },
           envMap
         ),
-        edtechCore: createPBRMaterial(
+        edtechCore: createStdMat(
           THREE,
           {
             color: 0xffffff,
             map: textures.edtechBattery || null,
-            metalness: 0.4,
-            roughness: 0.18,
-            clearcoat: 0.92,
-            clearcoatRoughness: 0.1
+            metalness: 0.35,
+            roughness: 0.22
           },
           envMap
         ),
@@ -870,7 +1944,7 @@
       };
 
       // =========================================================================
-      // A. WIDE BLACK RUBBER FAT TIRES & SILVER DRILLED DISC BRAKES
+      // A. WIDE FAT-TIRE WHEELS (6 meshes total)
       // =========================================================================
       const frontWheel = this._buildFatChopperWheel(true, mats, textures);
       frontWheel.position.set(0, 0.44, -1.1);
@@ -880,238 +1954,231 @@
       rearWheel.position.set(0, 0.44, 1.0);
       group.add(rearWheel);
 
-      // Rear Brake Caliper on Swingarm
-      const rearCaliper = new THREE.Mesh(
-        new THREE.BoxGeometry(0.08, 0.13, 0.17),
-        mats.blackSteel
-      );
-      rearCaliper.position.set(0.28, 0.62, 0.82);
-      group.add(rearCaliper);
-
       // =========================================================================
-      // B. DEEP GLOSSY RED (#c4121a) TUBULAR FRAME, FLOORBOARD & REAR FENDER
+      // B. MERGED GLOSSY RED CHOPPER FRAME & CHASSIS (1 draw call for red frame!)
       // =========================================================================
-      // Sculpted double-cradle tubular rails from steering head down under floorboard to rear axle dropout
+      const redFrameParts = [];
       [-0.24, 0.24].forEach((sideX) => {
         const cradleCurve = new THREE.CatmullRomCurve3([
-          new THREE.Vector3(sideX * 0.52, 1.04, -0.74), // Steering head tube
-          new THREE.Vector3(sideX * 0.82, 0.62, -0.64), // Swept front downtube
-          new THREE.Vector3(sideX, 0.31, -0.46),        // Front floorboard curve
-          new THREE.Vector3(sideX, 0.29, 0.44),         // Rear floorboard curve
-          new THREE.Vector3(sideX * 1.12, 0.44, 1.0)    // Rear swingarm axle dropout
+          new THREE.Vector3(sideX * 0.52, 1.04, -0.74),
+          new THREE.Vector3(sideX * 0.82, 0.62, -0.64),
+          new THREE.Vector3(sideX, 0.31, -0.46),
+          new THREE.Vector3(sideX, 0.29, 0.44),
+          new THREE.Vector3(sideX * 1.12, 0.44, 1.0)
         ]);
-        const cradleTube = new THREE.Mesh(
-          new THREE.TubeGeometry(cradleCurve, 32, 0.045, 16, false),
-          mats.candyRed
-        );
-        cradleTube.castShadow = true;
-        group.add(cradleTube);
+        redFrameParts.push(new THREE.TubeGeometry(cradleCurve, 26, 0.045, 12, false));
 
-        // Upper subframe tube cradling battery box & seat
         const subCurve = new THREE.CatmullRomCurve3([
           new THREE.Vector3(sideX * 0.82, 0.64, -0.62),
           new THREE.Vector3(sideX * 0.92, 0.42, -0.25),
           new THREE.Vector3(sideX * 0.96, 0.86, 0.16),
           new THREE.Vector3(sideX * 0.96, 0.92, 0.74)
         ]);
-        const subTube = new THREE.Mesh(
-          new THREE.TubeGeometry(subCurve, 24, 0.036, 16, false),
-          mats.candyRed
-        );
-        group.add(subTube);
+        redFrameParts.push(new THREE.TubeGeometry(subCurve, 20, 0.036, 12, false));
       });
 
-      // Front red aerodynamic neck gusset / fairing shield (matching poster & 0:00-0:03)
-      const frontNeckFairing = new THREE.Mesh(
-        new THREE.BoxGeometry(0.34, 0.48, 0.18),
-        mats.candyRed
+      // Sculpted rounded front neck gusset & belly pan via beveled ExtrudeGeometry
+      const neckShape = new THREE.Shape();
+      neckShape.moveTo(-0.14, 0.45);
+      neckShape.quadraticCurveTo(-0.18, 0.70, -0.13, 0.95);
+      neckShape.lineTo(0.13, 0.95);
+      neckShape.quadraticCurveTo(0.18, 0.70, 0.14, 0.45);
+      neckShape.closePath();
+      const neckFairingGeo = bakeGeo(
+        new THREE.ExtrudeGeometry(neckShape, {
+          depth: 0.12,
+          bevelEnabled: true,
+          bevelThickness: 0.035,
+          bevelSize: 0.025,
+          bevelSegments: 2
+        }),
+        0,
+        0.02,
+        -0.72,
+        0.32,
+        0,
+        0
       );
-      frontNeckFairing.position.set(0, 0.72, -0.66);
-      frontNeckFairing.rotation.x = 0.32;
-      frontNeckFairing.castShadow = true;
-      group.add(frontNeckFairing);
+      redFrameParts.push(neckFairingGeo);
 
-      // Lower deep glossy red belly pan
-      const bellyPan = new THREE.Mesh(
-        new THREE.BoxGeometry(0.56, 0.12, 1.28),
-        mats.candyRed
+      const panShape = new THREE.Shape();
+      panShape.moveTo(-0.62, 0.22);
+      panShape.lineTo(0.58, 0.22);
+      panShape.quadraticCurveTo(0.66, 0.27, 0.56, 0.33);
+      panShape.lineTo(-0.60, 0.33);
+      panShape.quadraticCurveTo(-0.68, 0.27, -0.62, 0.22);
+      const bellyPanGeo = bakeGeo(
+        new THREE.ExtrudeGeometry(panShape, {
+          depth: 0.48,
+          bevelEnabled: true,
+          bevelThickness: 0.03,
+          bevelSize: 0.02,
+          bevelSegments: 2
+        }),
+        0,
+        0,
+        -0.04,
+        0,
+        -Math.PI / 2,
+        0
       );
-      bellyPan.position.set(0, 0.27, -0.04);
-      bellyPan.castShadow = true;
-      group.add(bellyPan);
+      // Center extruded belly pan along X (depth 0.48 centered at -0.24)
+      bellyPanGeo.translate(0.24, 0, 0);
+      redFrameParts.push(bellyPanGeo);
 
-      // Wide Matte-Black Foot-Platform Floorboard with Longitudinal Grip Strips
-      const floorboardBase = new THREE.Mesh(
-        new THREE.BoxGeometry(0.54, 0.055, 1.16),
-        mats.blackSteel
+      group.add(new THREE.Mesh(mergeGeometries(THREE, redFrameParts), mats.candyRed));
+
+      // =========================================================================
+      // C. MERGED BLACK STEEL CHASSIS HARDWARE, FLOORBOARD, SHOCKS & SISSY BAR
+      // =========================================================================
+      const blackParts = [];
+      const chromeParts = [];
+
+      // Floorboard deck + rear caliper + kickstand + plate bracket + taillight housing
+      const deckShape = new THREE.Shape();
+      deckShape.moveTo(-0.24, -0.58);
+      deckShape.lineTo(0.24, -0.58);
+      deckShape.quadraticCurveTo(0.28, 0, 0.24, 0.56);
+      deckShape.lineTo(-0.24, 0.56);
+      deckShape.quadraticCurveTo(-0.28, 0, -0.24, -0.58);
+      const deckGeo = bakeGeo(
+        new THREE.ExtrudeGeometry(deckShape, {
+          depth: 0.045,
+          bevelEnabled: true,
+          bevelThickness: 0.012,
+          bevelSize: 0.015,
+          bevelSegments: 2
+        }),
+        0,
+        0.38,
+        -0.04,
+        Math.PI / 2,
+        0,
+        0
       );
-      floorboardBase.position.set(0, 0.355, -0.04);
-      floorboardBase.receiveShadow = true;
-      group.add(floorboardBase);
+      blackParts.push(deckGeo);
 
-      for (let g = -2; g <= 2; g++) {
-        const gripStrip = new THREE.Mesh(
-          new THREE.BoxGeometry(0.05, 0.016, 0.98),
-          mats.rubber
+      blackParts.push(bakeGeo(new THREE.CylinderGeometry(0.045, 0.045, 0.16, 10), 0.28, 0.62, 0.82, Math.PI / 2, 0, 0));
+      blackParts.push(
+        bakeGeo(new THREE.CylinderGeometry(0.018, 0.015, 0.42, 10), -0.29, 0.26, 0.25, Math.PI / 2 - 0.18, 0, 0.25)
+      );
+      blackParts.push(
+        bakeGeo(new THREE.CylinderGeometry(0.055, 0.055, 0.30, 12), 0, 0.83, 1.38, 0, 0, Math.PI / 2)
+      );
+
+      // Rear coil-over shocks & passenger sissy-bar struts
+      [-0.27, 0.27].forEach((sx) => {
+        chromeParts.push(bakeGeo(new THREE.CylinderGeometry(0.024, 0.024, 0.50, 12), sx, 0.67, 0.76, -0.34, 0, 0));
+        const springPts = [];
+        for (let i = 0; i <= 32; i++) {
+          const t = i / 32;
+          const a = t * Math.PI * 2 * 6;
+          springPts.push(new THREE.Vector3(Math.cos(a) * 0.048, (t - 0.5) * 0.40, Math.sin(a) * 0.048));
+        }
+        const springGeo = bakeGeo(
+          new THREE.TubeGeometry(new THREE.CatmullRomCurve3(springPts), 32, 0.014, 7, false),
+          sx,
+          0.67,
+          0.76,
+          -0.34,
+          0,
+          0
         );
-        gripStrip.position.set(g * 0.095, 0.388, -0.04);
-        group.add(gripStrip);
+        blackParts.push(springGeo);
+      });
+
+      [-0.14, 0.14].forEach((sx) => {
+        blackParts.push(bakeGeo(new THREE.CylinderGeometry(0.022, 0.026, 0.42, 12), sx, 1.19, 0.75, -0.18, 0, 0));
+      });
+
+      // Floorboard traction rubber strips merged into black steel deck (saves 1 draw call)
+      for (let g = -2; g <= 2; g++) {
+        blackParts.push(bakeGeo(new THREE.CylinderGeometry(0.014, 0.014, 0.96, 8), g * 0.09, 0.39, -0.04, Math.PI / 2, 0, 0));
       }
 
-      // Black Side Kickstand on Left Frame Rail (folded back for riding, matching poster mount)
-      const kickstand = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.018, 0.015, 0.42, 12),
-        mats.blackSteel
-      );
-      kickstand.rotation.x = Math.PI / 2 - 0.18;
-      kickstand.rotation.z = 0.25;
-      kickstand.position.set(-0.29, 0.26, 0.25);
-      group.add(kickstand);
+      group.add(new THREE.Mesh(mergeGeometries(THREE, blackParts), mats.blackSteel));
+      group.add(new THREE.Mesh(mergeGeometries(THREE, chromeParts), mats.chrome));
 
-      // Rear Black Coil-Over Suspension Shocks (damper + black helical spring coil)
-      [-0.27, 0.27].forEach((sx) => {
-        const shockGroup = new THREE.Group();
-        shockGroup.position.set(sx, 0.67, 0.76);
-        shockGroup.rotation.x = -0.34;
-
-        const damperShaft = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.024, 0.024, 0.52, 16),
-          mats.chrome
-        );
-        shockGroup.add(damperShaft);
-
-        const springPoints = [];
-        const turns = 7;
-        for (let i = 0; i <= 48; i++) {
-          const t = i / 48;
-          const a = t * Math.PI * 2 * turns;
-          springPoints.push(
-            new THREE.Vector3(Math.cos(a) * 0.052, (t - 0.5) * 0.42, Math.sin(a) * 0.052)
-          );
-        }
-        const springCurve = new THREE.CatmullRomCurve3(springPoints);
-        const springMesh = new THREE.Mesh(
-          new THREE.TubeGeometry(springCurve, 48, 0.015, 10, false),
-          mats.blackSteel
-        );
-        shockGroup.add(springMesh);
-        group.add(shockGroup);
-      });
-
-      // Rear Deep Glossy Red Hugger Fender with White Trim Stripe (32 radial segments)
+      // Rear Red Fender + Glowing Tail Light Bar + Contoured EDTECH Battery Box + Seat/Backrest
       const rearFender = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.515, 0.515, 0.55, 32, 1, false, 0, Math.PI * 1.08),
+        new THREE.CylinderGeometry(0.515, 0.515, 0.55, 26, 1, false, 0, Math.PI * 1.08),
         mats.rearFenderMat
       );
       rearFender.rotation.z = Math.PI / 2;
       rearFender.rotation.x = -0.28;
       rearFender.position.set(0, 0.45, 1.0);
-      rearFender.castShadow = true;
       group.add(rearFender);
 
-      // Bright Red LED Tail / Brake Light Assembly on Rear Fender (matches 0:05-0:07 in video!)
-      const tailLightHousing = new THREE.Mesh(
-        new THREE.BoxGeometry(0.32, 0.11, 0.1),
-        mats.blackSteel
-      );
-      tailLightHousing.position.set(0, 0.83, 1.38);
-      group.add(tailLightHousing);
-
       const tailLightBar = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.042, 0.042, 0.27, 20),
+        new THREE.CylinderGeometry(0.04, 0.04, 0.27, 14),
         mats.tailLightMat
       );
       tailLightBar.rotation.z = Math.PI / 2;
       tailLightBar.position.set(0, 0.83, 1.43);
       group.add(tailLightBar);
 
-      // Rear license plate holder below tail light
-      const plateBracket = new THREE.Mesh(
-        new THREE.BoxGeometry(0.22, 0.12, 0.02),
-        mats.blackSteel
-      );
-      plateBracket.position.set(0, 0.72, 1.43);
-      plateBracket.rotation.x = 0.22;
-      group.add(plateBracket);
+      if (textures.softGlow) {
+        const tailHalo = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            map: textures.softGlow,
+            color: 0xff141e,
+            transparent: true,
+            opacity: 0.48,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          })
+        );
+        tailHalo.position.set(0, 0.83, 1.47);
+        tailHalo.scale.set(0.7, 0.42, 1);
+        group.add(tailHalo);
+      }
 
-      // =========================================================================
-      // C. GLOSSY BLACK "EDTECH" UNDER-SEAT BATTERY BOX, SEAT & BACKREST
-      // =========================================================================
-      const batteryMaterials = [
-        mats.edtechCore, // right side (+X)
-        mats.edtechCore, // left side (-X)
-        mats.candyRed,   // glossy red top battery cover under seat
-        mats.blackSteel, // bottom
-        mats.edtechCore, // rear (+Z)
-        mats.edtechCore  // front (-Z)
-      ];
       const batteryCore = new THREE.Mesh(
-        new THREE.BoxGeometry(0.54, 0.52, 0.62),
-        batteryMaterials
+        new THREE.BoxGeometry(0.53, 0.50, 0.60),
+        [mats.edtechCore, mats.edtechCore, mats.candyRed, mats.blackSteel, mats.edtechCore, mats.edtechCore]
       );
       batteryCore.position.set(0, 0.65, 0.36);
-      batteryCore.castShadow = true;
       group.add(batteryCore);
 
-      // Contoured Padded Black Leather Stitched Saddle Seat
-      const seatBase = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.28, 0.31, 0.74, 24),
-        mats.stitchedLeather
+      // Merged Sculpted Saddle Seat + Sissy-Bar Backrest Cushion (1 draw call)
+      const saddleGeo = createAnatomicalLoft(
+        THREE,
+        [
+          { y: 0.90, cx: 0, cz: 0.38, rx: 0.23, rz: 0.34 },
+          { y: 0.96, cx: 0, cz: 0.38, rx: 0.26, rz: 0.36 },
+          { y: 1.01, cx: 0, cz: 0.40, rx: 0.22, rz: 0.31 }
+        ],
+        20,
+        true,
+        true
       );
-      seatBase.rotation.x = Math.PI / 2;
-      seatBase.scale.set(1.02, 0.36, 1.0);
-      seatBase.position.set(0, 0.98, 0.38);
-      group.add(seatBase);
-
-      // Black Steel Passenger Sissy-Bar Upright Struts + Wide Padded Backrest Cushion (0:03-0:07 & poster)
-      [-0.14, 0.14].forEach((sx) => {
-        const sissyBar = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.022, 0.026, 0.42, 16),
-          mats.blackSteel
-        );
-        sissyBar.position.set(sx, 1.19, 0.75);
-        sissyBar.rotation.x = -0.18;
-        group.add(sissyBar);
-      });
-      const backrestCushion = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.14, 0.14, 0.46, 24),
-        mats.stitchedLeather
+      const backrestGeo = bakeGeo(
+        new THREE.SphereGeometry(0.16, 18, 14),
+        0,
+        1.35,
+        0.79,
+        0,
+        0,
+        0,
+        1.45,
+        0.72,
+        0.58
       );
-      backrestCushion.rotation.z = Math.PI / 2;
-      backrestCushion.scale.set(1.0, 0.68, 1.0);
-      backrestCushion.position.set(0, 1.35, 0.79);
-      group.add(backrestCushion);
+      group.add(new THREE.Mesh(mergeGeometries(THREE, [saddleGeo, backrestGeo]), mats.stitchedLeather));
 
-      // Hidden-by-default Nitro Boost Flame Cones (visible = false unless isBoosting / isNitro is active!)
+      // Hidden-by-default Nitro Flame Cones
       const nitroFlames = [];
       let nitroFlameLeft = null;
       let nitroFlameRight = null;
-
       [-0.2, 0.2].forEach((tx, idx) => {
-        const outerFlameGeo = new THREE.ConeGeometry(0.09, 0.75, 16);
-        outerFlameGeo.rotateX(Math.PI / 2);
-        const outerFlameMat = new THREE.MeshBasicMaterial({
-          color: 0xff6600,
-          transparent: true,
-          opacity: 0.0,
-          depthWrite: false
-        });
-        const outerFlame = new THREE.Mesh(outerFlameGeo, outerFlameMat);
+        const outerGeo = new THREE.ConeGeometry(0.09, 0.75, 12);
+        outerGeo.rotateX(Math.PI / 2);
+        const outerFlame = new THREE.Mesh(
+          outerGeo,
+          new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.0, depthWrite: false })
+        );
         outerFlame.position.set(tx, 0.54, 1.55);
         outerFlame.visible = false;
-
-        const innerFlameGeo = new THREE.ConeGeometry(0.045, 0.5, 12);
-        innerFlameGeo.rotateX(Math.PI / 2);
-        const innerFlameMat = new THREE.MeshBasicMaterial({
-          color: 0xfffbeb,
-          transparent: true,
-          opacity: 0.85,
-          depthWrite: false
-        });
-        const innerFlame = new THREE.Mesh(innerFlameGeo, innerFlameMat);
-        innerFlame.position.set(0, 0, -0.1);
-        outerFlame.add(innerFlame);
-
         group.add(outerFlame);
         nitroFlames.push(outerFlame);
         if (idx === 0) nitroFlameLeft = outerFlame;
@@ -1119,305 +2186,148 @@
       });
 
       // =========================================================================
-      // D. FORKS, TALL BLACK HANDLEBARS, ROUND MIRRORS & MULTI-LED HALO HEADLIGHT
+      // D. STEERING GROUP: MERGED FORKS, TALL HANDLEBARS, MIRRORS & LED HALO HEADLIGHT
       // =========================================================================
       const steeringGroup = new THREE.Group();
       steeringGroup.position.set(0, 0.96, -0.78);
       group.add(steeringGroup);
 
-      // Steering neck head tube
-      const neckTube = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.072, 0.072, 0.34, 24),
-        mats.blackSteel
-      );
-      neckTube.rotation.x = 0.28;
-      neckTube.position.set(0, 0.1, -0.05);
-      steeringGroup.add(neckTube);
+      const steerBlackParts = [
+        bakeGeo(new THREE.CylinderGeometry(0.072, 0.072, 0.34, 18), 0, 0.1, -0.05, 0.28, 0, 0),
+        bakeGeo(new THREE.CylinderGeometry(0.04, 0.04, 0.54, 12), 0, -0.03, -0.1, 0, 0, Math.PI / 2),
+        bakeGeo(new THREE.CylinderGeometry(0.035, 0.035, 0.52, 12), 0, -0.24, -0.17, 0.28, 0, Math.PI / 2),
+        bakeGeo(new THREE.CylinderGeometry(0.038, 0.038, 0.52, 12), 0, 0.28, -0.02, 0, 0, Math.PI / 2),
+        bakeGeo(new THREE.CylinderGeometry(0.215, 0.16, 0.17, 24), 0, 0.22, -0.21, Math.PI / 2, 0, 0),
+        bakeGeo(new THREE.CylinderGeometry(0.06, 0.052, 0.05, 16), 0, -0.06, -0.22, Math.PI / 2, 0, 0),
+        bakeGeo(new THREE.BoxGeometry(0.28, 0.13, 0.04), 0, 0.56, 0.02, -0.52, 0, 0),
+        bakeGeo(new THREE.BoxGeometry(0.08, 0.14, 0.16), -0.26, -0.48, -0.2)
+      ];
+      const steerChromeParts = [
+        bakeGeo(new THREE.TorusGeometry(0.21, 0.02, 12, 28), 0, 0.22, -0.295),
+        bakeGeo(new THREE.TorusGeometry(0.056, 0.008, 8, 16), 0, -0.06, -0.245)
+      ];
 
-      // Dual Telescopic Front Forks (Black Upper & Lower Sliders + Polished Silver Inner Stanchion Tubes)
-      [-0.22, 0.22].forEach((fx) => {
-        // Upper black fork shroud between triple clamps
-        const upperShroud = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.046, 0.046, 0.38, 28),
-          mats.blackSteel
-        );
-        upperShroud.position.set(fx, 0.12, -0.06);
-        upperShroud.rotation.x = 0.28;
-        steeringGroup.add(upperShroud);
-
-        // Exposed polished silver/chrome inner stanchion tube
-        const chromeStanchion = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.038, 0.038, 0.36, 28),
-          mats.chrome
-        );
-        chromeStanchion.position.set(fx, -0.14, -0.14);
-        chromeStanchion.rotation.x = 0.28;
-        steeringGroup.add(chromeStanchion);
-
-        // Lower black fork slider leg down to front axle
-        const lowerSlider = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.052, 0.048, 0.48, 28),
-          mats.blackSteel
-        );
-        lowerSlider.position.set(fx, -0.44, -0.23);
-        lowerSlider.rotation.x = 0.28;
-        steeringGroup.add(lowerSlider);
-      });
-
-      // Front Brake Caliper on Left Fork Slider
-      const frontCaliper = new THREE.Mesh(
-        new THREE.BoxGeometry(0.08, 0.14, 0.16),
-        mats.blackSteel
-      );
-      frontCaliper.position.set(-0.26, -0.48, -0.2);
-      steeringGroup.add(frontCaliper);
-
-      // Black Billet Triple-Tree Clamps + Fork Arch Brace over Front Fender
-      const lowerTripleClamp = new THREE.Mesh(
-        new THREE.BoxGeometry(0.56, 0.075, 0.22),
-        mats.blackSteel
-      );
-      lowerTripleClamp.position.set(0, -0.03, -0.1);
-      steeringGroup.add(lowerTripleClamp);
-
-      const fenderArchBrace = new THREE.Mesh(
-        new THREE.BoxGeometry(0.54, 0.065, 0.2),
-        mats.blackSteel
-      );
-      fenderArchBrace.position.set(0, -0.24, -0.17);
-      fenderArchBrace.rotation.x = 0.28;
-      steeringGroup.add(fenderArchBrace);
-
-      const upperTripleClamp = new THREE.Mesh(
-        new THREE.BoxGeometry(0.54, 0.07, 0.2),
-        mats.blackSteel
-      );
-      upperTripleClamp.position.set(0, 0.28, -0.02);
-      steeringGroup.add(upperTripleClamp);
-
-      // Front Swept Deep Glossy Red Fender with White Lightning Bolt Decal (32 radial segments)
-      const frontFender = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.495, 0.495, 0.47, 32, 1, false, 0, Math.PI * 0.9),
-        mats.fenderLightning
-      );
-      frontFender.rotation.z = Math.PI / 2;
-      frontFender.rotation.x = 0.55;
-      frontFender.position.set(0, -0.52, -0.32);
-      frontFender.castShadow = true;
-      steeringGroup.add(frontFender);
-
-      // SIGNATURE ROUND MULTI-LED HALO HEADLIGHT (matches 0:00-0:04 & 0:08-0:09 in video & poster!)
-      const headlightPod = new THREE.Group();
-      headlightPod.position.set(0, 0.22, -0.21);
-      steeringGroup.add(headlightPod);
-
-      // Glossy black headlight bucket
-      const bucket = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.215, 0.165, 0.17, 32),
-        mats.blackSteel
-      );
-      bucket.rotation.x = Math.PI / 2;
-      headlightPod.add(bucket);
-
-      // Silver/chrome outer headlight bezel ring
-      const chromeBezel = new THREE.Mesh(
-        new THREE.TorusGeometry(0.21, 0.02, 16, 36),
-        mats.chrome
-      );
-      chromeBezel.position.set(0, 0, -0.085);
-      headlightPod.add(chromeBezel);
-
-      // Textured Multi-LED reflector face inside the lens
-      const reflectorFace = new THREE.Mesh(
-        new THREE.CircleGeometry(0.198, 32),
-        new THREE.MeshBasicMaterial({
-          map: textures.headlightFace || null,
-          color: 0xffffff
-        })
-      );
-      reflectorFace.rotation.y = Math.PI;
-      reflectorFace.position.set(0, 0, -0.09);
-      headlightPod.add(reflectorFace);
-
-      // 3D Glowing Outer Angel-Eye Halo Ring
-      const angelEyeRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.176, 0.015, 16, 36),
-        new THREE.MeshBasicMaterial({ color: 0xf8fafc })
-      );
-      angelEyeRing.position.set(0, 0, -0.096);
-      headlightPod.add(angelEyeRing);
-
-      // 3D Dual-Row Warm-White / Cool-White Multi-LED Emitters inside Halo
-      const warmLedMat = new THREE.MeshBasicMaterial({ color: 0xfffef5 });
-      const coolLedMat = new THREE.MeshBasicMaterial({ color: 0xeef6ff });
-      [-0.085, -0.028, 0.028, 0.085].forEach((lx) => {
-        const topEmitter = new THREE.Mesh(
-          new THREE.SphereGeometry(0.024, 12, 12),
-          warmLedMat
-        );
-        topEmitter.scale.set(1, 1, 0.45);
-        topEmitter.position.set(lx, 0.042, -0.095);
-        headlightPod.add(topEmitter);
-      });
-      [-0.068, 0, 0.068].forEach((lx) => {
-        const botEmitter = new THREE.Mesh(
-          new THREE.SphereGeometry(0.024, 12, 12),
-          coolLedMat
-        );
-        botEmitter.scale.set(1, 1, 0.45);
-        botEmitter.position.set(lx, -0.042, -0.095);
-        headlightPod.add(botEmitter);
-      });
-
-      // Small round secondary auxiliary lamp / horn bezel below main headlight (matching poster & 0:00-0:03)
-      const hornBezel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.062, 0.055, 0.05, 20),
-        mats.blackSteel
-      );
-      hornBezel.rotation.x = Math.PI / 2;
-      hornBezel.position.set(0, -0.06, -0.22);
-      steeringGroup.add(hornBezel);
-
-      const hornRim = new THREE.Mesh(
-        new THREE.TorusGeometry(0.058, 0.008, 10, 20),
-        mats.chrome
-      );
-      hornRim.position.set(0, -0.06, -0.245);
-      steeringGroup.add(hornRim);
-
-      // Thin Horizontal LED Turn Signal Strips on left & right of forks (matching poster & 0:00-0:03)
-      [-0.27, 0.27].forEach((bx) => {
-        const blinkerBody = new THREE.Mesh(
-          new THREE.BoxGeometry(0.13, 0.028, 0.032),
-          mats.blackSteel
-        );
-        blinkerBody.position.set(bx, 0.05, -0.17);
-        steeringGroup.add(blinkerBody);
-
-        const blinkerStrip = new THREE.Mesh(
-          new THREE.BoxGeometry(0.11, 0.016, 0.01),
-          new THREE.MeshBasicMaterial({ color: 0xfff3c4 })
-        );
-        blinkerStrip.position.set(bx, 0.05, -0.188);
-        steeringGroup.add(blinkerStrip);
-      });
-
-      // Sleek Rectangular Digital Dashboard Screen above handlebar clamp
-      const dashHousing = new THREE.Mesh(
-        new THREE.BoxGeometry(0.28, 0.13, 0.04),
-        mats.blackSteel
-      );
-      dashHousing.position.set(0, 0.56, 0.02);
-      dashHousing.rotation.x = -0.52;
-      steeringGroup.add(dashHousing);
-
-      const dashDisplay = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.25, 0.105),
-        new THREE.MeshBasicMaterial({
-          map: textures.digitalDash || null,
-          color: 0xffffff
-        })
-      );
-      dashDisplay.position.set(0, 0.562, 0.042);
-      dashDisplay.rotation.x = -0.52;
-      steeringGroup.add(dashDisplay);
-
-      // TALL BLACK HANDLEBARS WITH KNURLED GRIPS, LEVERS & ROUND MIRRORS (matching 0:00-0:09 & poster!)
       [-1, 1].forEach((side) => {
+        const fx = side * 0.22;
+        steerBlackParts.push(bakeGeo(new THREE.CylinderGeometry(0.046, 0.046, 0.38, 16), fx, 0.12, -0.06, 0.28, 0, 0));
+        steerChromeParts.push(bakeGeo(new THREE.CylinderGeometry(0.038, 0.038, 0.36, 16), fx, -0.14, -0.14, 0.28, 0, 0));
+        steerBlackParts.push(bakeGeo(new THREE.CylinderGeometry(0.052, 0.048, 0.48, 16), fx, -0.44, -0.23, 0.28, 0, 0));
+
+        // Tall black handlebars + switchbox + lever + mirror housing & stem
         const barCurve = new THREE.CatmullRomCurve3([
           new THREE.Vector3(0, 0.31, -0.01),
           new THREE.Vector3(side * 0.15, 0.33, 0.01),
           new THREE.Vector3(side * 0.26, 0.52, 0.08),
           new THREE.Vector3(side * 0.44, 0.54, 0.16)
         ]);
-        const barTube = new THREE.Mesh(
-          new THREE.TubeGeometry(barCurve, 24, 0.024, 16, false),
-          mats.blackSteel
-        );
-        steeringGroup.add(barTube);
+        steerBlackParts.push(new THREE.TubeGeometry(barCurve, 18, 0.024, 12, false));
+        steerBlackParts.push(bakeGeo(new THREE.BoxGeometry(0.06, 0.066, 0.066), side * 0.33, 0.535, 0.12));
+        steerBlackParts.push(bakeGeo(new THREE.BoxGeometry(0.16, 0.016, 0.024), side * 0.43, 0.535, 0.08, 0, -side * 0.32, 0));
 
-        // Knurled Black Rubber Handlebar Grip (exact target for Rafa's gloved hands!)
-        const grip = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.032, 0.032, 0.22, 20),
-          mats.rubber
-        );
-        grip.rotation.z = Math.PI / 2;
-        grip.rotation.y = -side * 0.2;
-        grip.position.set(side * 0.44, 0.54, 0.16);
-        steeringGroup.add(grip);
-
-        // Switchgear control housing block on handlebar
-        const switchBox = new THREE.Mesh(
-          new THREE.BoxGeometry(0.06, 0.068, 0.068),
-          mats.blackSteel
-        );
-        switchBox.position.set(side * 0.33, 0.535, 0.12);
-        steeringGroup.add(switchBox);
-
-        // Black Brake / Clutch Lever
-        const lever = new THREE.Mesh(
-          new THREE.BoxGeometry(0.16, 0.016, 0.024),
-          mats.blackSteel
-        );
-        lever.position.set(side * 0.43, 0.535, 0.08);
-        lever.rotation.y = -side * 0.32;
-        steeringGroup.add(lever);
-
-        // Curved Black Mirror Stem & Round Mirror Housing with Reflective Glass Face
         const stemCurve = new THREE.CatmullRomCurve3([
           new THREE.Vector3(side * 0.35, 0.56, 0.12),
           new THREE.Vector3(side * 0.48, 0.72, 0.11),
           new THREE.Vector3(side * 0.55, 0.84, 0.1)
         ]);
-        const mirrorStem = new THREE.Mesh(
-          new THREE.TubeGeometry(stemCurve, 16, 0.011, 12, false),
-          mats.blackSteel
-        );
-        steeringGroup.add(mirrorStem);
+        steerBlackParts.push(new THREE.TubeGeometry(stemCurve, 12, 0.011, 8, false));
+        steerBlackParts.push(bakeGeo(new THREE.CylinderGeometry(0.09, 0.085, 0.028, 20), side * 0.55, 0.84, 0.1, Math.PI / 2, 0, 0));
+        steerChromeParts.push(bakeGeo(new THREE.CircleGeometry(0.08, 18), side * 0.55, 0.84, 0.116));
 
-        const mirrorHousing = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.09, 0.085, 0.028, 28),
-          mats.blackSteel
+        // Handlebar grip merged cleanly into steering hardware
+        steerBlackParts.push(
+          bakeGeo(new THREE.CylinderGeometry(0.032, 0.032, 0.22, 14), side * 0.44, 0.54, 0.16, 0, -side * 0.2, Math.PI / 2)
         );
-        mirrorHousing.rotation.x = Math.PI / 2;
-        mirrorHousing.position.set(side * 0.55, 0.84, 0.1);
-        steeringGroup.add(mirrorHousing);
-
-        const mirrorGlass = new THREE.Mesh(
-          new THREE.CircleGeometry(0.08, 24),
-          mats.chrome
-        );
-        mirrorGlass.position.set(side * 0.55, 0.84, 0.116);
-        steeringGroup.add(mirrorGlass);
       });
 
-      // Realistic Headlight SpotLight + Subtle Soft Headlight Beam Cone
-      const headlightSpot = new THREE.SpotLight(0xf5f9ff, 2.6, 68, Math.PI / 5.4, 0.52, 1.15);
+      steeringGroup.add(new THREE.Mesh(mergeGeometries(THREE, steerBlackParts), mats.blackSteel));
+      steeringGroup.add(new THREE.Mesh(mergeGeometries(THREE, steerChromeParts), mats.chrome));
+
+      // Front Swept Red Fender + Digital Dash + Multi-LED Halo Face + Sprite Glow
+      const frontFender = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.495, 0.495, 0.47, 26, 1, false, 0, Math.PI * 0.9),
+        mats.fenderLightning
+      );
+      frontFender.rotation.z = Math.PI / 2;
+      frontFender.rotation.x = 0.55;
+      frontFender.position.set(0, -0.52, -0.32);
+      steeringGroup.add(frontFender);
+
+      const dashDisplay = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.25, 0.105),
+        new THREE.MeshBasicMaterial({ map: textures.digitalDash || null, color: 0xffffff })
+      );
+      dashDisplay.position.set(0, 0.562, 0.042);
+      dashDisplay.rotation.x = -0.52;
+      steeringGroup.add(dashDisplay);
+
+      const reflectorFace = new THREE.Mesh(
+        new THREE.CircleGeometry(0.198, 26),
+        new THREE.MeshBasicMaterial({ map: textures.headlightFace || null, color: 0xffffff })
+      );
+      reflectorFace.rotation.y = Math.PI;
+      reflectorFace.position.set(0, 0.22, -0.30);
+      steeringGroup.add(reflectorFace);
+
+      // Merge 3D LED halo ring + LED projector beads + blinker strips into 1 emissive mesh
+      const ledParts = [bakeGeo(new THREE.TorusGeometry(0.176, 0.015, 10, 28), 0, 0.22, -0.306)];
+      [-0.085, -0.028, 0.028, 0.085].forEach((lx) => {
+        ledParts.push(bakeGeo(new THREE.SphereGeometry(0.024, 8, 8), lx, 0.262, -0.305, 0, 0, 0, 1, 1, 0.45));
+      });
+      [-0.068, 0, 0.068].forEach((lx) => {
+        ledParts.push(bakeGeo(new THREE.SphereGeometry(0.024, 8, 8), lx, 0.178, -0.305, 0, 0, 0, 1, 1, 0.45));
+      });
+      [-0.27, 0.27].forEach((bx) => {
+        ledParts.push(bakeGeo(new THREE.BoxGeometry(0.11, 0.018, 0.014), bx, 0.05, -0.185));
+      });
+      steeringGroup.add(
+        new THREE.Mesh(mergeGeometries(THREE, ledParts), new THREE.MeshBasicMaterial({ color: 0xf8fafc }))
+      );
+
+      if (textures.softGlow) {
+        const hlHalo = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            map: textures.softGlow,
+            color: 0xeef6ff,
+            transparent: true,
+            opacity: 0.65,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          })
+        );
+        hlHalo.position.set(0, 0.22, -0.34);
+        hlHalo.scale.set(1.35, 1.35, 1);
+        steeringGroup.add(hlHalo);
+      }
+
+      // Realistic Headlight SpotLight + Soft Volumetric Beam Cone
+      const headlightSpot = new THREE.SpotLight(0xf5f9ff, 2.4, 65, Math.PI / 5.4, 0.52, 1.15);
       headlightSpot.position.set(0, 1.18, -1.05);
       headlightSpot.target.position.set(0, 0.1, -26);
       group.add(headlightSpot);
       group.add(headlightSpot.target);
 
-      const coneGeo = new THREE.ConeGeometry(2.3, 13.5, 28, 1, true);
+      const coneGeo = new THREE.ConeGeometry(2.3, 13.5, 22, 1, true);
       coneGeo.rotateX(Math.PI / 2);
-      const coneMat = new THREE.MeshBasicMaterial({
-        color: 0xeef6ff,
-        transparent: true,
-        opacity: 0.055,
-        side: THREE.DoubleSide,
-        depthWrite: false
-      });
-      const headlightCone = new THREE.Mesh(coneGeo, coneMat);
+      const headlightCone = new THREE.Mesh(
+        coneGeo,
+        new THREE.MeshBasicMaterial({
+          color: 0xeef6ff,
+          transparent: true,
+          opacity: 0.055,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+      );
       headlightCone.position.set(0, 0.72, -7.8);
       group.add(headlightCone);
 
-      // Subtle tail/frame bounce PointLight (kept in refs for renderer compatibility)
       const underGlowLight = new THREE.PointLight(0xff1824, 0.45, 4.5, 2.0);
       underGlowLight.position.set(0, 0.35, 0.8);
+      underGlowLight.visible = false; // Zero shader overhead; renderer activates only if needed
       group.add(underGlowLight);
 
       // =========================================================================
-      // E. REALISTIC 3D RAFA RIDER (PT 13 & EDTECH Leather Jacket, Glasses, Beard)
+      // E. REALISTIC SCULPTED ANATOMICAL RAFA RIDER (ZERO BoxGeometry!)
       // =========================================================================
       const { riderGroup, riderTorso, riderHead } = this._buildRafaRider(mats, textures);
       group.add(riderGroup);
@@ -1440,821 +2350,466 @@
       };
 
       group.userData = Object.assign({}, group.userData, refs, { refs });
-
       return Object.assign({ group, refs }, refs);
     },
 
     /**
-     * Build Anatomically Proportioned Realistic 3D Rafa Rider
-     * Dark matte-leather biker jacket (roughness: 0.42, metalness: 0.1) with crisp
-     * "PT 13 / EDTECH" logos on back (0:05-0:07) and front chest (0:00-0:03),
-     * natural skin tone, well-defined dark beard & mustache, black rectangular glasses,
-     * hands firmly gripping the handlebars, and boots planted on the floorboards.
+     * Build Anatomically Sculpted 3D Rafa Rider (ZERO BoxGeometry on the human body!)
+     * Organic multi-slice V-taper torso, curved spline limbs, contoured boots, sculpted fingers,
+     * anatomical head/neck/jawline, tapered fade haircut, sculpted beard, and rectangular glasses.
      */
     _buildRafaRider(mats, textures) {
       const THREE = window.THREE;
       const riderGroup = new THREE.Group();
       riderGroup.name = 'RafaRiderGroup';
 
-      // Realistic dark matte-leather biker jacket (roughness: 0.42, metalness: 0.1)
-      const leatherJacketMat = createPBRMaterial(
+      const leatherSleeveMat = createStdMat(
         THREE,
-        {
-          color: 0x12141a,
-          roughness: 0.42,
-          metalness: 0.1,
-          clearcoat: 0.18,
-          clearcoatRoughness: 0.45
-        },
+        { color: 0x12141a, roughness: 0.42, metalness: 0.1 },
         mats.envMap
       );
-      const jacketBackMat = createPBRMaterial(
+      const jacketAtlasMat = createStdMat(
         THREE,
         {
           color: 0xffffff,
-          map: textures.jacketBack || null,
+          map: textures.jacketAtlas || null,
           roughness: 0.42,
-          metalness: 0.1,
-          clearcoat: 0.15,
-          clearcoatRoughness: 0.45
+          metalness: 0.1
         },
         mats.envMap
       );
-      const jacketFrontMat = createPBRMaterial(
+      const cargoPantsMat = createStdMat(
         THREE,
-        {
-          color: 0xffffff,
-          map: textures.jacketFront || null,
-          roughness: 0.42,
-          metalness: 0.1,
-          clearcoat: 0.15,
-          clearcoatRoughness: 0.45
-        },
+        { color: 0x1a1d24, roughness: 0.76, metalness: 0.05 },
         mats.envMap
       );
-      const cargoPantsMat = createPBRMaterial(
+      const bootMat = createStdMat(
         THREE,
-        {
-          color: 0x1b1d24,
-          roughness: 0.76,
-          metalness: 0.06
-        },
+        { color: 0x0f1116, roughness: 0.36, metalness: 0.18 },
         mats.envMap
       );
-      const bootMat = createPBRMaterial(
+      const skinMat = createStdMat(
         THREE,
-        {
-          color: 0x0f1116,
-          roughness: 0.35,
-          metalness: 0.22,
-          clearcoat: 0.3
-        },
+        { color: 0xdfa078, roughness: 0.56, metalness: 0.02 },
         mats.envMap
       );
-      const skinMat = createPBRMaterial(
+      const beardHairMat = createStdMat(
         THREE,
-        {
-          color: 0xdfa078,
-          roughness: 0.54,
-          metalness: 0.04
-        },
-        mats.envMap
-      );
-      const beardHairMat = createPBRMaterial(
-        THREE,
-        {
-          color: 0x1b130e,
-          roughness: 0.84,
-          metalness: 0.05
-        },
+        { color: 0x1b130e, roughness: 0.85, metalness: 0.04 },
         mats.envMap
       );
 
-      // 1. LOWER BODY: Dark Cargo Pants, Articulated Knees, Side Cargo Pockets & Boots on Floorboards
-      const pelvis = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.235, 0.22, 0.22, 24),
-        cargoPantsMat
+      // -----------------------------------------------------------------------
+      // 1. LOWER BODY: Anatomical Pelvis + Lofted Thighs/Knees/Calves + Contoured Boots
+      // -----------------------------------------------------------------------
+      const pantsParts = [];
+      const pelvisGeo = createAnatomicalLoft(
+        THREE,
+        [
+          { y: 0.94, cx: 0, cz: 0.37, rx: 0.215, rz: 0.155 },
+          { y: 1.03, cx: 0, cz: 0.36, rx: 0.23, rz: 0.165 },
+          { y: 1.12, cx: 0, cz: 0.35, rx: 0.205, rz: 0.15 }
+        ],
+        22,
+        true,
+        true
       );
-      pelvis.scale.set(1.15, 1, 0.82);
-      pelvis.position.set(0, 1.07, 0.36);
-      riderGroup.add(pelvis);
+      pantsParts.push(pelvisGeo);
+
+      const bootParts = [];
 
       [-1, 1].forEach((side) => {
-        const sideX = side * 0.2;
-
-        // Sculpted Thigh angled from saddle toward knee
-        const thigh = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.115, 0.098, 0.5, 24),
-          cargoPantsMat
+        const legGeo = createLoftedSplineLimb(
+          THREE,
+          [
+            new THREE.Vector3(side * 0.145, 1.03, 0.35), // Hip socket
+            new THREE.Vector3(side * 0.21, 1.01, 0.12),  // Muscular quadricep swell
+            new THREE.Vector3(side * 0.228, 0.90, -0.12), // Knee cap
+            new THREE.Vector3(side * 0.228, 0.68, -0.17), // Calf swell
+            new THREE.Vector3(side * 0.228, 0.48, -0.21)  // Tapered ankle entering boot
+          ],
+          (t) => {
+            if (t < 0.35) return 0.124 - t * 0.045;
+            if (t < 0.55) return 0.108 - (t - 0.35) * 0.07;
+            if (t < 0.78) return 0.094 + Math.sin(((t - 0.55) / 0.23) * Math.PI) * 0.008;
+            return 0.094 - (t - 0.78) * 0.095;
+          },
+          20,
+          16,
+          true
         );
-        thigh.position.set(sideX, 1.03, 0.13);
-        thigh.rotation.x = 1.22;
-        thigh.rotation.z = -side * 0.1;
-        thigh.castShadow = true;
-        riderGroup.add(thigh);
+        pantsParts.push(legGeo);
 
-        // Outer Thigh Cargo Pocket
-        const pocket = new THREE.Mesh(
-          new THREE.BoxGeometry(0.042, 0.16, 0.14),
-          cargoPantsMat
+        // Sculpted outer thigh cargo pocket aligned cleanly along thigh slope
+        const pocketShape = new THREE.Shape();
+        pocketShape.moveTo(-0.065, -0.075);
+        pocketShape.lineTo(0.065, -0.075);
+        pocketShape.quadraticCurveTo(0.08, 0, 0.065, 0.075);
+        pocketShape.lineTo(-0.065, 0.075);
+        pocketShape.quadraticCurveTo(-0.08, 0, -0.065, -0.075);
+        const pocketGeo = new THREE.ExtrudeGeometry(pocketShape, {
+          depth: 0.025,
+          bevelEnabled: true,
+          bevelThickness: 0.008,
+          bevelSize: 0.008,
+          bevelSegments: 2
+        });
+        pocketGeo.translate(0, 0, -0.0125);
+        pocketGeo.rotateY(side * (Math.PI / 2));
+        pocketGeo.rotateX(-0.32);
+        pocketGeo.translate(side * 0.305, 1.01, 0.12);
+        pantsParts.push(pocketGeo);
+
+        // Contoured Biker Boot (smooth extruded side profile + ankle collar, ZERO BoxGeometry!)
+        const bx = side * 0.228;
+        const bootSide = new THREE.Shape();
+        bootSide.moveTo(-0.18, 0.00);
+        bootSide.quadraticCurveTo(-0.20, 0.055, -0.12, 0.078);
+        bootSide.quadraticCurveTo(-0.03, 0.098, 0.01, 0.16);
+        bootSide.lineTo(0.095, 0.16);
+        bootSide.quadraticCurveTo(0.115, 0.075, 0.105, 0.00);
+        bootSide.closePath();
+        const bootBodyGeo = bakeGeo(
+          new THREE.ExtrudeGeometry(bootSide, {
+            depth: 0.12,
+            bevelEnabled: true,
+            bevelThickness: 0.025,
+            bevelSize: 0.018,
+            bevelSegments: 2,
+            curveSegments: 8
+          }),
+          bx,
+          0.405,
+          -0.23,
+          0,
+          -Math.PI / 2,
+          0
         );
-        pocket.position.set(sideX + side * 0.1, 1.04, 0.13);
-        pocket.rotation.x = 1.22;
-        riderGroup.add(pocket);
+        bootBodyGeo.translate(0.06, 0, 0);
+        bootParts.push(bootBodyGeo);
 
-        // Articulated Knee Sphere
-        const knee = new THREE.Mesh(
-          new THREE.SphereGeometry(0.1, 20, 20),
-          cargoPantsMat
+        const soleShape = new THREE.Shape();
+        soleShape.moveTo(-0.19, 0.0);
+        soleShape.lineTo(0.11, 0.0);
+        soleShape.quadraticCurveTo(0.12, 0.02, 0.105, 0.032);
+        soleShape.lineTo(-0.175, 0.032);
+        soleShape.quadraticCurveTo(-0.20, 0.018, -0.19, 0.0);
+        const soleGeo = bakeGeo(
+          new THREE.ExtrudeGeometry(soleShape, {
+            depth: 0.135,
+            bevelEnabled: true,
+            bevelThickness: 0.014,
+            bevelSize: 0.01,
+            bevelSegments: 1
+          }),
+          bx + 0.0675,
+          0.388,
+          -0.23,
+          0,
+          -Math.PI / 2,
+          0
         );
-        knee.position.set(sideX * 1.12, 0.92, -0.11);
-        riderGroup.add(knee);
-
-        // Lower Leg / Shin descending straight to floorboard
-        const shin = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.095, 0.082, 0.46, 24),
-          cargoPantsMat
-        );
-        shin.position.set(sideX * 1.12, 0.69, -0.16);
-        shin.rotation.x = -0.14;
-        shin.castShadow = true;
-        riderGroup.add(shin);
-
-        // Laced Black Leather Tactical Biker Boot planted firmly on the floorboard (y=0.39)
-        const bootGroup = new THREE.Group();
-        bootGroup.position.set(sideX * 1.12, 0.435, -0.24);
-        riderGroup.add(bootGroup);
-
-        const ankleShaft = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.084, 0.088, 0.17, 20),
-          bootMat
-        );
-        ankleShaft.position.set(0, 0.07, 0.05);
-        bootGroup.add(ankleShaft);
-
-        const bootFoot = new THREE.Mesh(
-          new THREE.BoxGeometry(0.175, 0.1, 0.33),
-          bootMat
-        );
-        bootFoot.position.set(0, 0.01, -0.02);
-        bootGroup.add(bootFoot);
-
-        const toeCap = new THREE.Mesh(
-          new THREE.SphereGeometry(0.088, 20, 16),
-          bootMat
-        );
-        toeCap.scale.set(1.0, 0.68, 1.15);
-        toeCap.position.set(0, 0.0, -0.155);
-        bootGroup.add(toeCap);
-
-        // Heavy Lug Sole resting on floorboard
-        const lugSole = new THREE.Mesh(
-          new THREE.BoxGeometry(0.19, 0.034, 0.35),
-          mats.rubber
-        );
-        lugSole.position.set(0, -0.042, -0.02);
-        bootGroup.add(lugSole);
-
-        for (let l = 0; l < 3; l++) {
-          const lace = new THREE.Mesh(
-            new THREE.BoxGeometry(0.11, 0.012, 0.018),
-            mats.darkAlloy
-          );
-          lace.position.set(0, 0.048 + l * 0.032, -0.04 + l * 0.02);
-          bootGroup.add(lace);
-        }
+        bootParts.push(soleGeo);
       });
 
-      // 2. TORSO: Dark Matte-Leather Biker Jacket with Back ("PT 13 / EDTECH") & Front Chest Logos
+      riderGroup.add(new THREE.Mesh(mergeGeometries(THREE, pantsParts), cargoPantsMat));
+      riderGroup.add(new THREE.Mesh(mergeGeometries(THREE, bootParts), bootMat));
+
+      // -----------------------------------------------------------------------
+      // 2. SCULPTED ANATOMICAL TORSO & LEATHER BIKER JACKET (1 draw call!)
+      // -----------------------------------------------------------------------
       const riderTorso = new THREE.Group();
-      riderTorso.position.set(0, 1.42, 0.34);
-      riderTorso.rotation.x = -0.12;
+      riderTorso.position.set(0, 1.36, 0.34);
+      riderTorso.rotation.x = -0.14;
       riderGroup.add(riderTorso);
 
-      // Core Jacket Torso with distinct Back (+Z) and Front Chest (-Z) textures
-      const torsoMats = [
-        leatherJacketMat, // right (+X)
-        leatherJacketMat, // left (-X)
-        leatherJacketMat, // top (+Y)
-        leatherJacketMat, // bottom (-Y)
-        jacketBackMat,    // back (+Z facing chase camera: white "PT 13 / EDTECH")
-        jacketFrontMat    // front chest (-Z: red "PT 13" right chest patch + "EDTECH" left chest gear)
-      ];
-      const jacketBody = new THREE.Mesh(
-        new THREE.BoxGeometry(0.54, 0.66, 0.31),
-        torsoMats
-      );
-      jacketBody.castShadow = true;
-      riderTorso.add(jacketBody);
-
-      // Sculpted rounded shoulders & subtle red piping seam
-      [-1, 1].forEach((side) => {
-        const shoulderCap = new THREE.Mesh(
-          new THREE.SphereGeometry(0.132, 24, 20),
-          leatherJacketMat
-        );
-        shoulderCap.position.set(side * 0.275, 0.24, 0);
-        riderTorso.add(shoulderCap);
-      });
-
-      // Stand-up biker jacket collar with throat snap strap
-      const collar = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.155, 0.18, 0.12, 24),
-        leatherJacketMat
-      );
-      collar.position.set(0, 0.36, -0.015);
-      riderTorso.add(collar);
-
-      // 3. ARMS, ROLLED SLEEVES, FOREARMS & FINGERLESS BIKER GLOVES FIRMLY ON HANDLEBARS
-      [-1, 1].forEach((side) => {
-        // Upper leather sleeve from shoulder (0.28, 0.24, 0) to elbow (0.39, 0.17, -0.45)
-        const upperArm = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.098, 0.086, 0.46, 24),
-          leatherJacketMat
-        );
-        upperArm.position.set(side * 0.335, 0.2, -0.22);
-        upperArm.rotation.x = 1.38;
-        upperArm.rotation.z = -side * 0.24;
-        upperArm.castShadow = true;
-        riderTorso.add(upperArm);
-
-        // Rolled leather cuff at elbow
-        const cuff = new THREE.Mesh(
-          new THREE.TorusGeometry(0.086, 0.018, 12, 24),
-          leatherJacketMat
-        );
-        cuff.position.set(side * 0.39, 0.17, -0.44);
-        cuff.rotation.x = 1.45;
-        riderTorso.add(cuff);
-
-        // Muscular exposed forearm reaching from elbow (0.39, 0.17, -0.45) to handlebar grip (0.44, 0.19, -0.94)
-        const forearm = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.078, 0.064, 0.48, 24),
-          skinMat
-        );
-        forearm.position.set(side * 0.415, 0.18, -0.68);
-        forearm.rotation.x = 1.6;
-        forearm.rotation.z = -side * 0.1;
-        riderTorso.add(forearm);
-
-        // Black wristwatch on left wrist (matching poster & 0:00-0:02)
-        if (side === 1) {
-          const watchBand = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.068, 0.068, 0.035, 18),
-            bootMat
-          );
-          watchBand.rotation.x = 1.6;
-          watchBand.position.set(side * 0.432, 0.185, -0.85);
-          riderTorso.add(watchBand);
+      // Sculpted pectoral / spine cross-section shaper
+      const chestShape = (chestBulge, spineHollow) => (theta, cosT, sinT) => {
+        // sinT > 0 is FRONT (-Z); sinT < 0 is BACK (+Z)
+        let dr = 0;
+        if (sinT > 0) {
+          // Twin pectoral swell with subtle sternum valley at theta = PI/2
+          const sternumValley = Math.exp(-Math.pow((theta - Math.PI / 2) / 0.22, 2));
+          dr += sinT * chestBulge * (1 - 0.55 * sternumValley);
+        } else {
+          // Subtle spinal groove at center back (theta = 1.5*PI) flanked by scapula/lats
+          const spineDip = Math.exp(-Math.pow((theta - Math.PI * 1.5) / 0.25, 2));
+          dr += -sinT * (chestBulge * 0.55) - spineDip * spineHollow;
         }
+        return { dr };
+      };
 
-        // Fingerless Black Leather Riding Glove locked directly onto the handlebar grip!
-        // In world/bikeGroup space: (side * 0.44, 1.50, -0.62) === grip position!
-        const gloveGroup = new THREE.Group();
-        gloveGroup.position.set(side * 0.44, 0.19, -0.94);
-        riderTorso.add(gloveGroup);
+      const torsoGeo = createAnatomicalLoft(
+        THREE,
+        [
+          { y: -0.31, cx: 0, cz: 0.012, rx: 0.205, rz: 0.142, v: 0.04 },
+          { y: -0.22, cx: 0, cz: 0.010, rx: 0.192, rz: 0.132, v: 0.18 },
+          { y: -0.12, cx: 0, cz: 0.006, rx: 0.214, rz: 0.145, v: 0.34 },
+          { y: -0.02, cx: 0, cz: 0.002, rx: 0.242, rz: 0.156, v: 0.50, shapeFn: chestShape(0.014, 0.01) },
+          { y: 0.09, cx: 0, cz: -0.002, rx: 0.268, rz: 0.164, v: 0.68, shapeFn: chestShape(0.022, 0.014) },
+          { y: 0.19, cx: 0, cz: -0.004, rx: 0.282, rz: 0.162, v: 0.84, shapeFn: chestShape(0.018, 0.012) },
+          { y: 0.26, cx: 0, cz: -0.004, rx: 0.236, rz: 0.142, v: 0.92 },
+          { y: 0.31, cx: 0, cz: 0.010, rx: 0.136, rz: 0.128, v: 0.96 },
+          { y: 0.37, cx: 0, cz: 0.012, rx: 0.122, rz: 0.118, v: 1.00 }
+        ],
+        28,
+        true,
+        false
+      );
 
-        const glovePalm = new THREE.Mesh(
-          new THREE.BoxGeometry(0.12, 0.088, 0.125),
-          bootMat
+      riderTorso.add(new THREE.Mesh(torsoGeo, jacketAtlasMat));
+
+      // -----------------------------------------------------------------------
+      // 3. ANATOMICAL ARMS, ROLLED SLEEVES, FOREARMS & FINGERLESS GLOVES ON GRIPS
+      // -----------------------------------------------------------------------
+      const sleeveParts = [];
+      const forearmSkinParts = [];
+      const gloveParts = [];
+
+      // Compute exact handlebar grip positions in riderTorso local space
+      riderTorso.updateMatrixWorld(true);
+      const invTorso = new THREE.Matrix4().copy(riderTorso.matrixWorld).invert();
+
+      [-1, 1].forEach((side) => {
+        const gripWorld = new THREE.Vector3(side * 0.44, 1.50, -0.62);
+        const gripLocal = gripWorld.clone().applyMatrix4(invTorso);
+
+        const shoulderPt = new THREE.Vector3(side * 0.268, 0.21, -0.005);
+        const elbowPt = new THREE.Vector3(side * 0.375, 0.04, -0.35);
+        const cuffPt = new THREE.Vector3(side * 0.398, 0.08, -0.52);
+        const wristPt = gripLocal.clone().add(new THREE.Vector3(0, -0.01, 0.11));
+
+        // Rolled leather jacket upper sleeve (shoulder -> deltoid -> bicep -> elbow -> rolled cuff)
+        const sleeveGeo = createLoftedSplineLimb(
+          THREE,
+          [
+            shoulderPt,
+            new THREE.Vector3(side * 0.315, 0.14, -0.14),
+            elbowPt,
+            cuffPt
+          ],
+          (t) => {
+            if (t < 0.25) return 0.105 - t * 0.04;
+            if (t > 0.85) return 0.082 + Math.sin(((t - 0.85) / 0.15) * Math.PI) * 0.012;
+            return 0.095 - (t - 0.25) * 0.022;
+          },
+          18,
+          16,
+          true
         );
-        gloveGroup.add(glovePalm);
+        sleeveParts.push(sleeveGeo);
 
-        // 4 Carbon/dark-metal knuckle guard studs
+        // Exposed muscular skin forearm from inside rolled cuff down to wrist
+        const forearmGeo = createLoftedSplineLimb(
+          THREE,
+          [
+            cuffPt.clone().add(new THREE.Vector3(0, -0.005, 0.03)),
+            new THREE.Vector3(side * 0.415, 0.11, -0.68),
+            wristPt
+          ],
+          (t) => {
+            if (t < 0.3) return 0.072 + Math.sin((t / 0.3) * Math.PI * 0.5) * 0.008;
+            return 0.08 - t * 0.026;
+          },
+          14,
+          14,
+          true
+        );
+        forearmSkinParts.push(forearmGeo);
+
+        // Sculpted fingerless leather riding glove wrapping the hand & handlebar grip
+        const gloveShape = new THREE.Shape();
+        gloveShape.moveTo(-0.056, -0.028);
+        gloveShape.quadraticCurveTo(0, -0.038, 0.056, -0.028);
+        gloveShape.quadraticCurveTo(0.064, 0, 0.052, 0.026);
+        gloveShape.quadraticCurveTo(0, 0.036, -0.052, 0.026);
+        gloveShape.quadraticCurveTo(-0.064, 0, -0.056, -0.028);
+        const gloveGeo = bakeGeo(
+          new THREE.ExtrudeGeometry(gloveShape, {
+            depth: 0.095,
+            bevelEnabled: true,
+            bevelThickness: 0.014,
+            bevelSize: 0.012,
+            bevelSegments: 2
+          }),
+          gripLocal.x,
+          gripLocal.y + 0.014,
+          gripLocal.z - 0.038,
+          0.18,
+          -side * 0.18,
+          0
+        );
+        gloveParts.push(gloveGeo);
+
+        // 4 sculpted knuckle guard bumps across glove back
         for (let k = -1.5; k <= 1.5; k += 1) {
-          const knuckle = new THREE.Mesh(
-            new THREE.SphereGeometry(0.015, 10, 10),
-            mats.darkAlloy
+          gloveParts.push(
+            bakeGeo(
+              new THREE.SphereGeometry(0.013, 8, 8),
+              gripLocal.x + k * 0.024,
+              gripLocal.y + 0.044,
+              gripLocal.z - 0.005
+            )
           );
-          knuckle.position.set(k * 0.025, 0.048, -0.015);
-          gloveGroup.add(knuckle);
         }
 
-        // Exposed fingertips wrapping around the handlebar grip
-        const fingers = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.034, 0.034, 0.105, 14),
-          skinMat
+        // Wristwatch on Rafa's left wrist (side === -1, matching poster & video 0:00!)
+        if (side === -1) {
+          gloveParts.push(
+            bakeGeo(
+              new THREE.CylinderGeometry(0.06, 0.06, 0.032, 14),
+              wristPt.x,
+              wristPt.y,
+              wristPt.z + 0.035,
+              1.45,
+              0,
+              0
+            )
+          );
+        }
+
+        // Curved bare fingers & thumb curling naturally underneath the rubber handlebar grip
+        for (let f = -1.5; f <= 1.5; f += 1) {
+          const fx = gripLocal.x + f * 0.023;
+          const fingerCurve = createLoftedSplineLimb(
+            THREE,
+            [
+              new THREE.Vector3(fx, gripLocal.y + 0.01, gripLocal.z - 0.042),
+              new THREE.Vector3(fx, gripLocal.y - 0.032, gripLocal.z - 0.038),
+              new THREE.Vector3(fx, gripLocal.y - 0.036, gripLocal.z + 0.004)
+            ],
+            () => 0.011,
+            6,
+            8,
+            true
+          );
+          forearmSkinParts.push(fingerCurve);
+        }
+        const thumbCurve = createLoftedSplineLimb(
+          THREE,
+          [
+            new THREE.Vector3(gripLocal.x - side * 0.045, gripLocal.y + 0.015, gripLocal.z + 0.035),
+            new THREE.Vector3(gripLocal.x - side * 0.042, gripLocal.y - 0.012, gripLocal.z + 0.015),
+            new THREE.Vector3(gripLocal.x - side * 0.02, gripLocal.y - 0.028, gripLocal.z - 0.015)
+          ],
+          () => 0.013,
+          6,
+          8,
+          true
         );
-        fingers.rotation.z = Math.PI / 2;
-        fingers.position.set(0, -0.012, -0.068);
-        gloveGroup.add(fingers);
+        forearmSkinParts.push(thumbCurve);
       });
 
-      // 4. REALISTIC 3D HEAD: Natural Skin Tone, Eyes, Full Dark Beard & Mustache, Black Rectangular Glasses & Spiked Hair
+      riderTorso.add(new THREE.Mesh(mergeGeometries(THREE, sleeveParts), leatherSleeveMat));
+      riderTorso.add(new THREE.Mesh(mergeGeometries(THREE, forearmSkinParts), skinMat));
+      riderTorso.add(new THREE.Mesh(mergeGeometries(THREE, gloveParts), bootMat));
+
+      // -----------------------------------------------------------------------
+      // 4. REALISTIC SCULPTED HUMAN HEAD, FADE HAIR, BEARD & RECTANGULAR GLASSES
+      // -----------------------------------------------------------------------
       const riderHead = new THREE.Group();
-      riderHead.position.set(0, 0.56, -0.03);
-      riderHead.rotation.x = 0.1; // Keep head level while torso leans slightly forward
+      riderHead.position.set(0, 0.56, -0.022);
+      riderHead.rotation.x = 0.14; // Keep gaze level ahead while torso leans forward
       riderTorso.add(riderHead);
 
-      // Sculpted Neck
-      const neck = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.086, 0.1, 0.16, 24),
-        skinMat
-      );
-      neck.position.set(0, -0.14, 0.02);
-      riderHead.add(neck);
+      // Sculpted Anatomical Head + Smooth Neck + Ears (1 draw call!)
+      riderHead.add(new THREE.Mesh(createAnatomicalHeadGeometry(THREE), skinMat));
 
-      // Cranium & Jawline (32 segments)
-      const cranium = new THREE.Mesh(
-        new THREE.SphereGeometry(0.19, 32, 28),
-        skinMat
-      );
-      cranium.scale.set(0.94, 1.08, 0.98);
-      cranium.castShadow = true;
-      riderHead.add(cranium);
+      // Sculpted Hair Fade + Crown + Tapered Nape + Jaw Beard + Mustache + Eyebrows (1 draw call!)
+      riderHead.add(new THREE.Mesh(createSculptedHairAndBeardGeometry(THREE), beardHairMat));
 
-      // Brow ridge & nose bridge
-      const nose = new THREE.Mesh(
-        new THREE.ConeGeometry(0.03, 0.082, 16),
-        skinMat
-      );
-      nose.rotation.x = -Math.PI / 2 + 0.25;
-      nose.position.set(0, 0.006, -0.192);
-      riderHead.add(nose);
-
-      // 3D Eyes & Dark Eyebrows behind the glasses (visible in front/three-quarter shots!)
-      const scleraMat = new THREE.MeshBasicMaterial({ color: 0xf8fafc });
-      const irisMat = new THREE.MeshBasicMaterial({ color: 0x291a10 });
-      [-0.068, 0.068].forEach((ex, idx) => {
-        const side = idx === 0 ? -1 : 1;
-        const eyeball = new THREE.Mesh(
-          new THREE.SphereGeometry(0.024, 14, 14),
-          scleraMat
-        );
-        eyeball.scale.set(1.1, 0.85, 0.6);
-        eyeball.position.set(ex, 0.034, -0.172);
-        riderHead.add(eyeball);
-
-        const iris = new THREE.Mesh(
-          new THREE.CircleGeometry(0.012, 12),
-          irisMat
-        );
-        iris.rotation.y = Math.PI;
-        iris.position.set(ex, 0.034, -0.187);
-        riderHead.add(iris);
-
-        const brow = new THREE.Mesh(
-          new THREE.BoxGeometry(0.062, 0.015, 0.02),
-          beardHairMat
-        );
-        brow.position.set(ex, 0.066, -0.175);
-        brow.rotation.z = side * 0.08;
-        riderHead.add(brow);
+      // 3D Eyes seated inside sculpted eye sockets (2 draw calls)
+      const scleraParts = [];
+      const irisParts = [];
+      [-0.056, 0.056].forEach((ex) => {
+        scleraParts.push(bakeGeo(new THREE.SphereGeometry(0.02, 10, 10), ex, 0.028, -0.165, 0, 0, 0, 1.1, 0.85, 0.6));
+        irisParts.push(bakeGeo(new THREE.CircleGeometry(0.01, 10), ex, 0.028, -0.178, 0, Math.PI, 0));
       });
+      riderHead.add(new THREE.Mesh(mergeGeometries(THREE, scleraParts), new THREE.MeshBasicMaterial({ color: 0xf8fafc })));
+      riderHead.add(new THREE.Mesh(mergeGeometries(THREE, irisParts), new THREE.MeshBasicMaterial({ color: 0x26180f })));
 
-      // 3D Ears
-      [-0.18, 0.18].forEach((ex) => {
-        const ear = new THREE.Mesh(
-          new THREE.SphereGeometry(0.036, 16, 16),
-          skinMat
-        );
-        ear.scale.set(0.46, 1.15, 0.72);
-        ear.position.set(ex, 0.01, -0.01);
-        riderHead.add(ear);
-      });
-
-      // Well-Defined Dark-Brown/Black Full Short Boxed Beard, Mustache & Soul Patch
-      // Shifted slightly forward so beard hugs jaw/chin and does not create an artifact on the cranium back
-      const beardShell = new THREE.Mesh(
-        new THREE.SphereGeometry(0.194, 28, 22, 0, Math.PI * 2, Math.PI * 0.51, Math.PI * 0.44),
-        beardHairMat
-      );
-      beardShell.scale.set(0.95, 1.05, 1.01);
-      beardShell.position.set(0, -0.016, -0.024);
-      riderHead.add(beardShell);
-
-      // Tapered back-of-head hairline mesh & nape coverage (eliminates pale cranium stripe in 3rd-person chase camera)
-      const backHair = new THREE.Mesh(
-        new THREE.SphereGeometry(0.198, 28, 22, 0, Math.PI, Math.PI * 0.32, Math.PI * 0.48),
-        beardHairMat
-      );
-      backHair.scale.set(0.97, 1.07, 1.03);
-      backHair.position.set(0, 0.012, 0.016);
-      riderHead.add(backHair);
-
-      // Sculpted tapered nape patch filling the transition from cranium into jacket collar (z > 0.02)
-      const napeHair = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.096, 0.104, 0.10, 20, 1, false, -Math.PI * 0.5, Math.PI),
-        beardHairMat
-      );
-      napeHair.scale.set(0.96, 1.0, 0.85);
-      napeHair.position.set(0, -0.125, 0.038);
-      riderHead.add(napeHair);
-
-      // Chin beard fullness
-      const chinBeard = new THREE.Mesh(
-        new THREE.SphereGeometry(0.108, 20, 18),
-        beardHairMat
-      );
-      chinBeard.scale.set(1.12, 0.88, 1.12);
-      chinBeard.position.set(0, -0.132, -0.102);
-      riderHead.add(chinBeard);
-
-      // Contoured 3D Mustache & Lower Lip
-      [-1, 1].forEach((side) => {
-        const stache = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.017, 0.023, 0.082, 14),
-          beardHairMat
-        );
-        stache.rotation.z = Math.PI / 2 + side * 0.26;
-        stache.position.set(side * 0.035, -0.046, -0.184);
-        riderHead.add(stache);
-      });
-
-      // Natural Short Textured Dark Spiked Hair (Tapered sides + sculpted top spikes)
-      const hairCap = new THREE.Mesh(
-        new THREE.SphereGeometry(0.196, 28, 22, 0, Math.PI * 2, 0, Math.PI * 0.52),
-        beardHairMat
-      );
-      hairCap.scale.set(0.96, 1.07, 1.0);
-      hairCap.position.set(0, 0.022, 0.012);
-      riderHead.add(hairCap);
-
-      for (let row = 0; row < 3; row++) {
-        for (let s = -2; s <= 2; s++) {
-          const spike = new THREE.Mesh(
-            new THREE.ConeGeometry(0.038, 0.095, 12),
-            beardHairMat
-          );
-          spike.position.set(
-            s * 0.038,
-            0.2 - row * 0.015,
-            -0.082 + row * 0.06
-          );
-          spike.rotation.x = -0.3 + row * 0.2;
-          spike.rotation.z = -s * 0.14;
-          riderHead.add(spike);
-        }
-      }
-
-      // 3D Black Rectangular Eyeglasses (hollow frame rims + subtle clear anti-reflective lenses)
-      const frameMat = createPBRMaterial(
+      // Sleek Black Rectangular Eyeglasses (1 draw call for frame + 1 draw call for lenses)
+      const frameMat = createStdMat(
         THREE,
-        {
-          color: 0x08090d,
-          roughness: 0.18,
-          metalness: 0.35,
-          clearcoat: 0.9
-        },
+        { color: 0x08090d, roughness: 0.18, metalness: 0.42 },
         mats.envMap
       );
-      const lensMat = createPBRMaterial(
+      riderHead.add(new THREE.Mesh(createGlassesGeometry(THREE), frameMat));
+
+      const lensParts = [];
+      [-0.062, 0.062].forEach((gx) => {
+        lensParts.push(bakeGeo(new THREE.PlaneGeometry(0.072, 0.04), gx, 0.028, -0.184, 0, Math.PI, 0));
+      });
+      const lensMat = createStdMat(
         THREE,
         {
           color: 0xdbeafe,
-          metalness: 0.85,
-          roughness: 0.05,
-          clearcoat: 1.0,
+          metalness: 0.88,
+          roughness: 0.06,
           transparent: true,
-          opacity: 0.28
+          opacity: 0.26
         },
         mats.envMap
       );
-
-      [-0.072, 0.072].forEach((gx) => {
-        // Top, bottom, left, right frame bars so the rectangular glasses frame is genuinely hollow around the eyes
-        const topBar = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.011, 0.018), frameMat);
-        topBar.position.set(gx, 0.056, -0.188);
-        const botBar = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.009, 0.016), frameMat);
-        botBar.position.set(gx, 0.008, -0.188);
-        const leftBar = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.054, 0.016), frameMat);
-        leftBar.position.set(gx - 0.038, 0.032, -0.188);
-        const rightBar = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.054, 0.016), frameMat);
-        rightBar.position.set(gx + 0.038, 0.032, -0.188);
-        riderHead.add(topBar, botBar, leftBar, rightBar);
-
-        const glassLens = new THREE.Mesh(
-          new THREE.PlaneGeometry(0.068, 0.04),
-          lensMat
-        );
-        glassLens.rotation.y = Math.PI;
-        glassLens.position.set(gx, 0.032, -0.195);
-        riderHead.add(glassLens);
-      });
-
-      // Glasses center bridge & side temple arms
-      const noseBridge = new THREE.Mesh(
-        new THREE.BoxGeometry(0.03, 0.011, 0.016),
-        frameMat
-      );
-      noseBridge.position.set(0, 0.046, -0.188);
-      riderHead.add(noseBridge);
-
-      [-0.174, 0.174].forEach((tx) => {
-        const templeArm = new THREE.Mesh(
-          new THREE.BoxGeometry(0.014, 0.016, 0.185),
-          frameMat
-        );
-        templeArm.position.set(tx, 0.04, -0.095);
-        riderHead.add(templeArm);
-      });
+      riderHead.add(new THREE.Mesh(mergeGeometries(THREE, lensParts), lensMat));
 
       return { riderGroup, riderTorso, riderHead };
     },
 
     /**
-     * Build a High-Detail 32-Segment Car Wheel with Alloy Rim & Brake Rotor
-     */
-    _buildCarWheel(radius, width, envMap, isPolice) {
-      const THREE = window.THREE;
-      const textures = this.getTextures();
-      const wheel = new THREE.Group();
-
-      const tireMat = createPBRMaterial(
-        THREE,
-        {
-          color: 0x141619,
-          map: textures.tireTread || null,
-          roughness: 0.65,
-          metalness: 0.08
-        },
-        envMap
-      );
-      const rimMat = createPBRMaterial(
-        THREE,
-        {
-          color: isPolice ? 0x1e232d : 0xcbd5e1,
-          metalness: 0.85,
-          roughness: 0.2,
-          clearcoat: 0.8
-        },
-        envMap
-      );
-      const capMat = createPBRMaterial(
-        THREE,
-        {
-          color: 0xe2e8f0,
-          metalness: 0.92,
-          roughness: 0.1
-        },
-        envMap
-      );
-
-      const tire = new THREE.Mesh(
-        new THREE.CylinderGeometry(radius, radius, width, 32),
-        tireMat
-      );
-      tire.rotation.z = Math.PI / 2;
-      tire.castShadow = true;
-      wheel.add(tire);
-
-      const rim = new THREE.Mesh(
-        new THREE.CylinderGeometry(radius * 0.64, radius * 0.64, width + 0.015, 24),
-        rimMat
-      );
-      rim.rotation.z = Math.PI / 2;
-      wheel.add(rim);
-
-      for (let s = 0; s < 5; s++) {
-        const spoke = new THREE.Mesh(
-          new THREE.BoxGeometry(width + 0.022, 0.042, radius * 1.2),
-          rimMat
-        );
-        spoke.rotation.x = (s * Math.PI * 2) / 5;
-        wheel.add(spoke);
-      }
-
-      // Chrome Police Interceptor center hubcap
-      const centerCap = new THREE.Mesh(
-        new THREE.CylinderGeometry(radius * 0.22, radius * 0.22, width + 0.03, 18),
-        capMat
-      );
-      centerCap.rotation.z = Math.PI / 2;
-      wheel.add(centerCap);
-
-      return wheel;
-    },
-
-    /**
-     * 2. Build Realistic Black-and-White Police Cruiser ('police_car') or SWAT BearCat ('swat_van')
-     * Matches the black-and-white "POLICE" sedans in the video (0:02-0:09):
-     * Deep glossy black front/rear/roof with crisp white doors reading "POLICE",
-     * realistic metallic front grille & push-bar, bright white headlights, red tail lights,
-     * and realistic low-profile roof LED lightbar flashing intense red and blue.
+     * 2. Build Sculpted Black-and-White Police Cruiser ('police_car') or SWAT BearCat ('swat_van')
+     * Uses beveled ExtrudeGeometry side-profile chassis with wheel arches & fastback slope (~16 meshes total).
      * @param {string} variant - 'police_car' | 'swat_van'
      * @param {THREE.Texture} envMap
-     * @returns {{ group: THREE.Group, redStrobeMat: THREE.Material, blueStrobeMat: THREE.Material, strobeLight: THREE.PointLight, wheels: THREE.Object3D[] }}
      */
     buildPoliceCruiser(variant, envMap) {
       const THREE = window.THREE;
-      const textures = this.getTextures();
+      const shared = this._getSharedMats(THREE, envMap);
       const isSwat = variant === 'swat_van';
       const group = new THREE.Group();
       group.name = isSwat ? 'SWATBearCatGroup' : 'ViceCityPoliceCruiserGroup';
 
-      // Deep glossy black paint for front, rear, and roof
-      const blackPaint = createPBRMaterial(
-        THREE,
-        {
-          color: 0x090b10,
-          metalness: 0.65,
-          roughness: isSwat ? 0.3 : 0.14,
-          clearcoat: isSwat ? 0.5 : 1.0,
-          clearcoatRoughness: 0.06,
-          envMapIntensity: 1.5
-        },
-        envMap
-      );
-      const doorDecalMat = createPBRMaterial(
-        THREE,
-        {
-          color: 0xffffff,
-          map: (isSwat ? textures.swatDoor : textures.policeDoor) || null,
-          metalness: 0.45,
-          roughness: 0.16,
-          clearcoat: 1.0,
-          clearcoatRoughness: 0.06,
-          envMapIntensity: 1.4
-        },
-        envMap
-      );
-      const darkGlassMat = createPBRMaterial(
-        THREE,
-        {
-          color: 0x0a101d,
-          metalness: 0.95,
-          roughness: 0.05,
-          clearcoat: 1.0,
-          envMapIntensity: 1.85
-        },
-        envMap
-      );
-      const steelMat = createPBRMaterial(
-        THREE,
-        {
-          color: 0x222834,
-          metalness: 0.85,
-          roughness: 0.22
-        },
-        envMap
-      );
-      const chromeMat = createPBRMaterial(
-        THREE,
-        {
-          color: 0xdbe4f0,
-          metalness: 0.94,
-          roughness: 0.1
-        },
-        envMap
-      );
-
-      // Intense Flashing Red & Blue LED Lightbar Materials
       const redStrobeMat = new THREE.MeshBasicMaterial({ color: 0xff1722 });
       const blueStrobeMat = new THREE.MeshBasicMaterial({ color: 0x0077ff });
 
+      // 1. Sculpted Extruded Car Chassis (Material 0 = Sides w/ POLICE doors, Material 1 = Hood/Roof/Trunk)
+      const chassisGeo = createExtrudedCarBody(THREE, isSwat);
+      const sideMat = isSwat ? shared.swatDoor : shared.policeDoor;
+      const shellMat = isSwat ? shared.swatBlack : shared.blackPaint;
+      group.add(new THREE.Mesh(chassisGeo, [sideMat, shellMat]));
+
+      // 2. Sculpted Raked Front Windshield & Fastback Rear Window Insert (1 draw call)
+      const glassParts = [];
       if (!isSwat) {
-        // =====================================================================
-        // REALISTIC BLACK & WHITE POLICE INTERCEPTOR SEDAN (0:02-0:09 in video)
-        // =====================================================================
-        const lowerBodyMats = [
-          doorDecalMat, // right side (+X): black fenders + crisp white "POLICE" doors
-          doorDecalMat, // left side (-X): black fenders + crisp white "POLICE" doors
-          blackPaint,   // top deck
-          blackPaint,   // underbody
-          blackPaint,   // rear (+Z)
-          blackPaint    // front (-Z)
-        ];
-        const lowerChassis = new THREE.Mesh(
-          new THREE.BoxGeometry(2.04, 0.66, 4.48),
-          lowerBodyMats
-        );
-        lowerChassis.position.y = 0.56;
-        lowerChassis.castShadow = true;
-        lowerChassis.receiveShadow = true;
-        group.add(lowerChassis);
+        glassParts.push(bakeGeo(new THREE.PlaneGeometry(1.62, 0.68), 0, 1.17, -0.66, -0.88, Math.PI, 0));
+        glassParts.push(bakeGeo(new THREE.PlaneGeometry(1.58, 0.70), 0, 1.16, 1.03, -1.07, 0, 0));
+      } else {
+        glassParts.push(bakeGeo(new THREE.PlaneGeometry(1.88, 0.74), 0, 1.67, -1.40, -0.52, Math.PI, 0));
+      }
+      group.add(new THREE.Mesh(mergeGeometries(THREE, glassParts), shared.darkGlass));
 
-        // Sculpted Glossy Black Front Hood & Rear Trunk Deck
-        const hood = new THREE.Mesh(
-          new THREE.BoxGeometry(1.92, 0.14, 1.38),
-          blackPaint
-        );
-        hood.position.set(0, 0.92, -1.46);
-        hood.rotation.x = 0.07;
-        group.add(hood);
-
-        const trunk = new THREE.Mesh(
-          new THREE.BoxGeometry(1.9, 0.14, 1.06),
-          blackPaint
-        );
-        trunk.position.set(0, 0.93, 1.64);
-        trunk.rotation.x = -0.05;
-        group.add(trunk);
-
-        // Dark Tinted Cabin Greenhouse + Deep Glossy Black Roof & Pillars
-        const cabinGlass = new THREE.Mesh(
-          new THREE.CylinderGeometry(1.12, 1.5, 0.54, 4),
-          darkGlassMat
-        );
-        cabinGlass.rotation.y = Math.PI / 4;
-        cabinGlass.scale.set(0.84, 1.0, 1.06);
-        cabinGlass.position.set(0, 1.16, -0.04);
-        group.add(cabinGlass);
-
-        const blackRoof = new THREE.Mesh(
-          new THREE.BoxGeometry(1.54, 0.07, 1.72),
-          blackPaint
-        );
-        blackRoof.position.set(0, 1.44, -0.04);
-        group.add(blackRoof);
-
-        // Glossy Black B-Pillars & Side Mirrors
-        [-0.78, 0.78].forEach((px) => {
-          const bPillar = new THREE.Mesh(
-            new THREE.BoxGeometry(0.06, 0.52, 0.14),
-            blackPaint
-          );
-          bPillar.position.set(px, 1.16, -0.04);
-          group.add(bPillar);
-        });
-
-        [-1.04, 1.04].forEach((mx) => {
-          const sideMirror = new THREE.Mesh(
-            new THREE.BoxGeometry(0.16, 0.1, 0.12),
-            blackPaint
-          );
-          sideMirror.position.set(mx, 0.98, -0.68);
-          group.add(sideMirror);
-        });
-
-        // Metallic Front Grille & Chrome Trim
-        const frontGrille = new THREE.Mesh(
-          new THREE.BoxGeometry(1.06, 0.24, 0.05),
-          steelMat
-        );
-        frontGrille.position.set(0, 0.62, -2.23);
-        group.add(frontGrille);
-
-        const grilleSurround = new THREE.Mesh(
-          new THREE.BoxGeometry(1.1, 0.28, 0.03),
-          chromeMat
-        );
-        grilleSurround.position.set(0, 0.62, -2.22);
-        group.add(grilleSurround);
-
-        // Heavy-Duty Metallic Police Push-Bar / PIT Maneuver Ram Bumper
-        const bullbarGroup = new THREE.Group();
-        bullbarGroup.position.set(0, 0.54, -2.3);
-        group.add(bullbarGroup);
-
-        const crossBeam1 = new THREE.Mesh(new THREE.BoxGeometry(1.56, 0.08, 0.12), steelMat);
-        crossBeam1.position.y = 0.12;
-        const crossBeam2 = new THREE.Mesh(new THREE.BoxGeometry(1.56, 0.08, 0.12), steelMat);
-        crossBeam2.position.y = -0.12;
-        bullbarGroup.add(crossBeam1, crossBeam2);
-
+      // 3. Merged Steel Push-Bar / Ram Bumper + Front Grille + Side Mirrors (1 draw call)
+      const trimParts = [];
+      if (!isSwat) {
+        trimParts.push(bakeGeo(new THREE.BoxGeometry(1.04, 0.22, 0.06), 0, 0.58, -2.26));
+        trimParts.push(bakeGeo(new THREE.BoxGeometry(1.54, 0.075, 0.12), 0, 0.62, -2.32));
+        trimParts.push(bakeGeo(new THREE.BoxGeometry(1.54, 0.075, 0.12), 0, 0.38, -2.32));
         [-0.48, 0.48].forEach((bx) => {
-          const upright = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.56, 0.16), steelMat);
-          upright.position.x = bx;
-          bullbarGroup.add(upright);
+          trimParts.push(bakeGeo(new THREE.BoxGeometry(0.085, 0.54, 0.16), bx, 0.50, -2.32));
+        });
+        [-1.01, 1.01].forEach((mx) => {
+          trimParts.push(bakeGeo(new THREE.BoxGeometry(0.15, 0.09, 0.11), mx, 0.96, -0.68));
         });
       } else {
-        // =====================================================================
-        // ARMORED BLACK SWAT TACTICAL BEARCAT
-        // =====================================================================
-        const swatBodyMats = [
-          doorDecalMat,
-          doorDecalMat,
-          blackPaint,
-          blackPaint,
-          blackPaint,
-          blackPaint
-        ];
-        const armoredHull = new THREE.Mesh(
-          new THREE.BoxGeometry(2.38, 1.75, 5.25),
-          swatBodyMats
-        );
-        armoredHull.position.set(0, 1.28, 0.15);
-        armoredHull.castShadow = true;
-        armoredHull.receiveShadow = true;
-        group.add(armoredHull);
-
-        const engineHood = new THREE.Mesh(
-          new THREE.BoxGeometry(2.26, 1.05, 1.45),
-          blackPaint
-        );
-        engineHood.position.set(0, 0.92, -2.15);
-        group.add(engineHood);
-
-        const batteringRam = new THREE.Mesh(
-          new THREE.BoxGeometry(2.35, 0.75, 0.28),
-          steelMat
-        );
-        batteringRam.position.set(0, 0.68, -2.92);
-        group.add(batteringRam);
-
-        const viewport = new THREE.Mesh(
-          new THREE.BoxGeometry(2.05, 0.48, 0.12),
-          darkGlassMat
-        );
-        viewport.position.set(0, 1.65, -2.44);
-        group.add(viewport);
+        trimParts.push(bakeGeo(new THREE.BoxGeometry(2.26, 0.68, 0.26), 0, 0.68, -2.86));
       }
+      group.add(new THREE.Mesh(mergeGeometries(THREE, trimParts), shared.steel));
 
-      // 4 Spinning 3D Police Interceptor Wheels
+      // 4. 4 Sculpted Wheels (2 draw calls each = 8 meshes)
       const wheels = [];
       const wheelRadius = isSwat ? 0.46 : 0.37;
-      const wheelWidth = isSwat ? 0.36 : 0.28;
-      const wheelX = isSwat ? 1.18 : 1.01;
+      const wheelWidth = isSwat ? 0.34 : 0.26;
+      const wheelX = isSwat ? 1.10 : 0.94;
       const wheelZFront = isSwat ? -1.85 : -1.38;
       const wheelZRear = isSwat ? 1.65 : 1.38;
 
@@ -2270,71 +2825,60 @@
         wheels.push(w);
       });
 
-      // Bright White Headlights + Amber Corner Markers + Red LED Tail Lights
-      const frontZ = isSwat ? -2.88 : -2.23;
-      const rearZ = isSwat ? 2.78 : 2.24;
-      const headMat = new THREE.MeshBasicMaterial({ color: 0xf8fafc });
-      const amberMat = new THREE.MeshBasicMaterial({ color: 0xff9900 });
-      const tailMat = new THREE.MeshBasicMaterial({ color: 0xff141e });
-
-      [-0.72, 0.72].forEach((lx) => {
-        const hl = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.15, 0.06), headMat);
-        hl.position.set(lx, 0.65, frontZ);
-        group.add(hl);
-
-        const cornerAmber = new THREE.Mesh(
-          new THREE.BoxGeometry(0.1, 0.14, 0.06),
-          amberMat
-        );
-        cornerAmber.position.set(lx + (lx > 0 ? 0.22 : -0.22), 0.65, frontZ + 0.01);
-        group.add(cornerAmber);
+      // 5. Merged Headlights, Amber Markers & Red LED Tail Light Bar (3 draw calls)
+      const frontZ = isSwat ? -2.79 : -2.26;
+      const rearZ = isSwat ? 2.69 : 2.26;
+      const hlParts = [];
+      const amberParts = [];
+      [-0.70, 0.70].forEach((lx) => {
+        hlParts.push(bakeGeo(new THREE.BoxGeometry(0.38, 0.14, 0.06), lx, 0.60, frontZ));
+        amberParts.push(bakeGeo(new THREE.BoxGeometry(0.10, 0.13, 0.06), lx + (lx > 0 ? 0.22 : -0.22), 0.60, frontZ + 0.02));
       });
+      group.add(new THREE.Mesh(mergeGeometries(THREE, hlParts), shared.headlightEmissive));
+      group.add(new THREE.Mesh(mergeGeometries(THREE, amberParts), shared.amberEmissive));
 
       const brakeStrip = new THREE.Mesh(
-        new THREE.BoxGeometry(isSwat ? 2.1 : 1.84, 0.15, 0.06),
-        tailMat
+        new THREE.BoxGeometry(isSwat ? 1.98 : 1.78, 0.13, 0.06),
+        shared.tailEmissive
       );
-      brakeStrip.position.set(0, 0.7, rearZ);
+      brakeStrip.position.set(0, 0.68, rearZ);
       group.add(brakeStrip);
 
-      // Realistic Low-Profile Roof LED Lightbar Assembly (Intense Red Left + Blue Right)
-      const lightbarY = isSwat ? 2.24 : 1.52;
-      const lightbarZ = isSwat ? -1.65 : -0.06;
+      // 6. Low-Profile Roof LED Lightbar + Additive Strobe Halo Sprites (Zero PointLight shader overhead!)
+      const lightbarY = isSwat ? 2.20 : 1.51;
+      const lightbarZ = isSwat ? -0.45 : -0.02;
 
-      // Low-profile mounting feet
-      [-0.52, 0.52].forEach((fx) => {
-        const mountFoot = new THREE.Mesh(
-          new THREE.BoxGeometry(0.14, 0.06, 0.22),
-          blackPaint
-        );
-        mountFoot.position.set(fx, lightbarY - 0.05, lightbarZ);
-        group.add(mountFoot);
-      });
+      const barMountGeo = mergeGeometries(THREE, [
+        bakeGeo(new THREE.BoxGeometry(0.18, 0.09, 0.24), 0, lightbarY, lightbarZ),
+        bakeGeo(new THREE.BoxGeometry(0.14, 0.06, 0.20), -0.52, lightbarY - 0.05, lightbarZ),
+        bakeGeo(new THREE.BoxGeometry(0.14, 0.06, 0.20), 0.52, lightbarY - 0.05, lightbarZ)
+      ]);
+      group.add(new THREE.Mesh(barMountGeo, shared.steel));
 
-      const centerPod = new THREE.Mesh(
-        new THREE.BoxGeometry(0.18, 0.095, 0.24),
-        steelMat
-      );
-      centerPod.position.set(0, lightbarY, lightbarZ);
-      group.add(centerPod);
-
-      const redLightPod = new THREE.Mesh(
-        new THREE.BoxGeometry(0.66, 0.09, 0.22),
-        redStrobeMat
-      );
-      redLightPod.position.set(-0.41, lightbarY, lightbarZ);
+      const redLightPod = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.085, 0.21), redStrobeMat);
+      redLightPod.position.set(-0.40, lightbarY, lightbarZ);
       group.add(redLightPod);
 
-      const blueLightPod = new THREE.Mesh(
-        new THREE.BoxGeometry(0.66, 0.09, 0.22),
-        blueStrobeMat
-      );
-      blueLightPod.position.set(0.41, lightbarY, lightbarZ);
+      const blueLightPod = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.085, 0.21), blueStrobeMat);
+      blueLightPod.position.set(0.40, lightbarY, lightbarZ);
       group.add(blueLightPod);
 
-      // Dynamic Strobe PointLight
-      const strobeLight = new THREE.PointLight(0xff1722, 1.5, 11, 2.0);
+      if (shared.redGlowSprite && shared.blueGlowSprite) {
+        const redGlow = new THREE.Sprite(shared.redGlowSprite);
+        redGlow.position.set(-0.42, lightbarY + 0.03, lightbarZ);
+        redGlow.scale.set(1.5, 0.9, 1);
+        group.add(redGlow);
+
+        const blueGlow = new THREE.Sprite(shared.blueGlowSprite);
+        blueGlow.position.set(0.42, lightbarY + 0.03, lightbarZ);
+        blueGlow.scale.set(1.5, 0.9, 1);
+        group.add(blueGlow);
+      }
+
+      // Kept invisible so WebGL does not recompile 6+ extra dynamic PointLight shaders per cruiser
+      const strobeLight = new THREE.PointLight(0xff1722, 0, 11, 2.0);
       strobeLight.position.set(0, lightbarY + 0.22, lightbarZ);
+      strobeLight.visible = false;
       group.add(strobeLight);
 
       const refs = {
@@ -2348,125 +2892,86 @@
       };
 
       group.userData = Object.assign({}, group.userData, refs);
-
       return Object.assign({ group, refs }, refs);
     },
 
     /**
-     * 3. Build Realistic Night Traffic Sedan / Sports Coupe
+     * 3. Build Sculpted Night Traffic Fastback Sedan / Sports Coupe (~14 meshes total)
      * @param {number} colorHex
      * @param {THREE.Texture} envMap
-     * @returns {{ group: THREE.Group, wheels: THREE.Object3D[], tailLightMat: THREE.Material, underglowMat: THREE.Material }}
      */
     buildTrafficCar(colorHex, envMap) {
       const THREE = window.THREE;
+      const shared = this._getSharedMats(THREE, envMap);
       const group = new THREE.Group();
       group.name = 'ViceCityTrafficCarGroup';
 
       const primaryColor = colorHex !== undefined ? colorHex : 0x1e2430;
-      const bodyPaint = createPBRMaterial(
+      const bodyPaint = createStdMat(
         THREE,
         {
           color: primaryColor,
           metalness: 0.72,
-          roughness: 0.16,
-          clearcoat: 1.0,
-          clearcoatRoughness: 0.06,
+          roughness: 0.17,
           envMapIntensity: 1.45
         },
         envMap
       );
-      const darkTrimMat = createPBRMaterial(
-        THREE,
-        {
-          color: 0x0f1218,
-          metalness: 0.5,
-          roughness: 0.35
-        },
-        envMap
-      );
-      const glassMat = createPBRMaterial(
-        THREE,
-        {
-          color: 0x090f1c,
-          metalness: 0.95,
-          roughness: 0.05,
-          clearcoat: 1.0,
-          envMapIntensity: 1.85
-        },
-        envMap
-      );
 
-      // Sleek realistic coupe/sedan lower body
-      const mainChassis = new THREE.Mesh(
-        new THREE.BoxGeometry(2.0, 0.56, 4.32),
-        bodyPaint
-      );
-      mainChassis.position.y = 0.5;
-      mainChassis.castShadow = true;
-      mainChassis.receiveShadow = true;
-      group.add(mainChassis);
+      // 1. Sculpted Extruded Fastback Sports Coupe Silhouette
+      const chassisGeo = createExtrudedCarBody(THREE, false);
+      group.add(new THREE.Mesh(chassisGeo, [bodyPaint, bodyPaint]));
 
-      const frontHood = new THREE.Mesh(
-        new THREE.BoxGeometry(1.9, 0.15, 1.32),
-        bodyPaint
+      // 2. Merged Dark Tinted Cabin Windows (Windshield, Rear Glass, Tapered Side Greenhouse)
+      const sideWinShape = new THREE.Shape();
+      sideWinShape.moveTo(-0.78, 0.94);
+      sideWinShape.lineTo(-0.30, 1.36);
+      sideWinShape.lineTo(0.56, 1.34);
+      sideWinShape.lineTo(1.14, 0.96);
+      sideWinShape.closePath();
+      const sideWinGeo = bakeGeo(
+        new THREE.ExtrudeGeometry(sideWinShape, { depth: 2.0, bevelEnabled: false }),
+        1.0,
+        0,
+        0,
+        0,
+        -Math.PI / 2,
+        0
       );
-      frontHood.position.set(0, 0.78, -1.36);
-      frontHood.rotation.x = 0.1;
-      group.add(frontHood);
+      const glassParts = [
+        bakeGeo(new THREE.PlaneGeometry(1.62, 0.68), 0, 1.17, -0.66, -0.88, Math.PI, 0),
+        bakeGeo(new THREE.PlaneGeometry(1.58, 0.70), 0, 1.16, 1.03, -1.07, 0, 0),
+        sideWinGeo
+      ];
+      group.add(new THREE.Mesh(mergeGeometries(THREE, glassParts), shared.darkGlass));
 
-      // Cabin greenhouse
-      const canopy = new THREE.Mesh(
-        new THREE.CylinderGeometry(1.08, 1.46, 0.5, 4),
-        glassMat
-      );
-      canopy.rotation.y = Math.PI / 4;
-      canopy.scale.set(0.84, 1.0, 1.06);
-      canopy.position.set(0, 1.02, 0.02);
-      group.add(canopy);
-
-      const roofPanel = new THREE.Mesh(
-        new THREE.BoxGeometry(1.48, 0.06, 1.62),
-        bodyPaint
-      );
-      roofPanel.position.set(0, 1.27, 0.02);
-      group.add(roofPanel);
-
-      const rearLip = new THREE.Mesh(
-        new THREE.BoxGeometry(1.86, 0.06, 0.18),
-        darkTrimMat
-      );
-      rearLip.position.set(0, 0.84, 2.06);
-      group.add(rearLip);
-
-      // 4 Spinning Alloy Wheels
+      // 3. 4 Sculpted Alloy Wheels (8 meshes total)
       const wheels = [];
       [
-        [-0.98, 0.35, -1.34],
-        [0.98, 0.35, -1.34],
-        [-0.98, 0.35, 1.34],
-        [0.98, 0.35, 1.34]
+        [-0.93, 0.35, -1.38],
+        [0.93, 0.35, -1.38],
+        [-0.93, 0.35, 1.38],
+        [0.93, 0.35, 1.38]
       ].forEach(([wx, wy, wz]) => {
-        const w = this._buildCarWheel(0.35, 0.26, envMap, false);
+        const w = this._buildCarWheel(0.35, 0.25, envMap, false);
         w.position.set(wx, wy, wz);
         group.add(w);
         wheels.push(w);
       });
 
-      // Realistic White Headlights & Red LED Tail Lights (no cartoon neon underglow plane)
-      const headMat = new THREE.MeshBasicMaterial({ color: 0xf8fafc });
-      [-0.7, 0.7].forEach((hx) => {
-        const hl = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.12, 0.06), headMat);
-        hl.position.set(hx, 0.56, -2.16);
-        group.add(hl);
+      // 4. Merged White Headlights & Red LED Tail Lights
+      const hlParts = [];
+      [-0.68, 0.68].forEach((hx) => {
+        hlParts.push(bakeGeo(new THREE.BoxGeometry(0.36, 0.12, 0.06), hx, 0.56, -2.26));
       });
+      group.add(new THREE.Mesh(mergeGeometries(THREE, hlParts), shared.headlightEmissive));
 
       const tailLightMat = new THREE.MeshBasicMaterial({ color: 0xff141e });
-      [-0.68, 0.68].forEach((tx) => {
-        const tl = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.14, 0.06), tailLightMat);
-        tl.position.set(tx, 0.64, 2.16);
-        group.add(tl);
+      const tlParts = [];
+      [-0.66, 0.66].forEach((tx) => {
+        tlParts.push(bakeGeo(new THREE.BoxGeometry(0.44, 0.13, 0.06), tx, 0.66, 2.26));
       });
+      group.add(new THREE.Mesh(mergeGeometries(THREE, tlParts), tailLightMat));
 
       const underglowMat = new THREE.MeshBasicMaterial({
         color: primaryColor,
@@ -2481,18 +2986,14 @@
         underglowMat
       };
       group.userData = Object.assign({}, group.userData, refs);
-
       return Object.assign({ group, refs }, refs);
     },
 
     /**
-     * 4. Build Realistic Police Helicopter
-     * Matches the dark police helicopter in the video (0:02-0:09):
-     * Dark navy/black fuselage with white tail stripe, realistic spinning rotor blur disc,
-     * subtle red/blue belly beacon, and a realistic white searchlight cone (#eef6ff, soft opacity 0.14)
-     * pointing down at the road.
+     * 4. Build Sculpted Maverick Police Helicopter (~14 meshes total)
+     * Aerodynamic beveled ExtrudeGeometry hull, cockpit canopy, white tail markings,
+     * motion-blur rotors, gimbal searchlight & soft searchlight cone.
      * @param {THREE.Texture} envMap
-     * @returns {{ group: THREE.Group, refs: Object, mainRotor: THREE.Group, tailRotor: THREE.Group, spotLight: THREE.SpotLight, lightCone: THREE.Mesh }}
      */
     buildPoliceHelicopter(envMap) {
       const THREE = window.THREE;
@@ -2500,151 +3001,86 @@
       const group = new THREE.Group();
       group.name = 'ViceCityPoliceHelicopterGroup';
 
-      // Dark navy/black fuselage material matching 0:02-0:09 in the video
-      const darkNavyMetal = createPBRMaterial(
+      const darkNavyMetal = createStdMat(
         THREE,
         {
           color: 0x0b0f19,
           metalness: 0.72,
           roughness: 0.24,
-          clearcoat: 0.85,
-          clearcoatRoughness: 0.12
+          envMapIntensity: 1.4
         },
         envMap
       );
-      const whiteStripeMat = createPBRMaterial(
+      const whiteStripeMat = createStdMat(
         THREE,
         {
           color: 0xf8fafc,
-          metalness: 0.35,
-          roughness: 0.2,
-          clearcoat: 0.9
+          metalness: 0.3,
+          roughness: 0.22
         },
         envMap
       );
-      const canopyGlass = createPBRMaterial(
+      const canopyGlass = createStdMat(
         THREE,
         {
           color: 0x0f1c2e,
           metalness: 0.92,
           roughness: 0.06,
-          clearcoat: 1.0,
           transparent: true,
-          opacity: 0.82
+          opacity: 0.82,
+          envMapIntensity: 1.75
         },
         envMap
       );
 
-      // 1. Sleek Dark Navy/Black Fuselage & Top Turbine Cowling
-      const fuselage = new THREE.Mesh(
-        new THREE.SphereGeometry(1.16, 32, 24),
-        darkNavyMetal
-      );
-      fuselage.scale.set(0.8, 0.68, 1.78);
-      fuselage.castShadow = true;
-      group.add(fuselage);
-
-      // Top Turbine Engine Intake Cowling
-      const turbineCowling = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.4, 0.54, 1.85, 24),
-        darkNavyMetal
-      );
-      turbineCowling.rotation.x = Math.PI / 2;
-      turbineCowling.position.set(0, 0.64, -0.15);
-      group.add(turbineCowling);
-
-      // 2. Dark Tinted Cockpit Bubble Canopy (nose points toward +Z facing Rafa)
-      const cockpitCanopy = new THREE.Mesh(
-        new THREE.SphereGeometry(0.94, 32, 24),
-        canopyGlass
-      );
-      cockpitCanopy.scale.set(0.9, 0.75, 1.32);
-      cockpitCanopy.position.set(0, -0.05, 1.46);
-      group.add(cockpitCanopy);
-
-      // 3. Tapered Dark Navy/Black Tail Boom with Crisp WHITE Tail Stripe (matches 0:02-0:09 in video!)
-      const tailBoom = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.15, 0.35, 4.15, 24),
-        darkNavyMetal
-      );
-      tailBoom.rotation.x = Math.PI / 2;
-      tailBoom.position.set(0, 0.22, -3.15);
-      group.add(tailBoom);
-
-      // Crisp White Tail Stripe Band around the Tail Boom
-      const whiteTailStripe = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.24, 0.28, 0.62, 24),
-        whiteStripeMat
-      );
-      whiteTailStripe.rotation.x = Math.PI / 2;
-      whiteTailStripe.position.set(0, 0.22, -3.1);
-      group.add(whiteTailStripe);
-
-      // Horizontal Stabilizer Fins on Tail Boom
-      const hStab = new THREE.Mesh(
-        new THREE.BoxGeometry(1.55, 0.06, 0.38),
-        darkNavyMetal
-      );
-      hStab.position.set(0, 0.24, -4.15);
-      group.add(hStab);
-
-      // Swept Vertical Tail Fin with White Upper Stripe
-      const vFin = new THREE.Mesh(
-        new THREE.BoxGeometry(0.11, 1.25, 0.78),
-        darkNavyMetal
-      );
-      vFin.position.set(0, 0.66, -4.85);
-      vFin.rotation.x = -0.22;
-      group.add(vFin);
-
-      const vFinStripe = new THREE.Mesh(
-        new THREE.BoxGeometry(0.12, 0.24, 0.76),
-        whiteStripeMat
-      );
-      vFinStripe.position.set(0, 0.92, -4.88);
-      vFinStripe.rotation.x = -0.22;
-      group.add(vFinStripe);
-
-      // 4. Tubular Landing Skids & Struts
-      [-0.76, 0.76].forEach((sx) => {
-        const skid = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.044, 0.044, 3.45, 20),
-          darkNavyMetal
-        );
-        skid.rotation.x = Math.PI / 2;
-        skid.position.set(sx, -1.04, 0.2);
-        group.add(skid);
-
-        [-0.55, 0.85].forEach((sz) => {
-          const strut = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.032, 0.032, 0.66, 16),
-            darkNavyMetal
+      // 1. Merged Aerodynamic Maverick Fuselage + Horizontal Stabilizer + Tubular Skids (1 draw call!)
+      const hullParts = [
+        createHeliFuselageGeometry(THREE),
+        bakeGeo(new THREE.BoxGeometry(1.52, 0.06, 0.36), 0, 0.24, -4.15)
+      ];
+      [-0.74, 0.74].forEach((sx) => {
+        hullParts.push(bakeGeo(new THREE.CylinderGeometry(0.044, 0.044, 3.4, 12), sx, -1.04, 0.2, Math.PI / 2, 0, 0));
+        [-0.52, 0.82].forEach((sz) => {
+          hullParts.push(
+            bakeGeo(
+              new THREE.CylinderGeometry(0.032, 0.032, 0.64, 10),
+              sx * 0.9,
+              -0.73,
+              sz,
+              0,
+              0,
+              sx > 0 ? -0.22 : 0.22
+            )
           );
-          strut.position.set(sx * 0.9, -0.73, sz);
-          strut.rotation.z = sx > 0 ? -0.22 : 0.22;
-          group.add(strut);
         });
       });
+      group.add(new THREE.Mesh(mergeGeometries(THREE, hullParts), darkNavyMetal));
 
-      // 5. Main Rotor Assembly + Realistic Spinning Motion-Blur Rotor Disc
+      // 2. Dark Tinted Wrap-Around Cockpit Bubble Canopy (+Z nose)
+      const cockpitCanopy = new THREE.Mesh(new THREE.SphereGeometry(0.88, 22, 18), canopyGlass);
+      cockpitCanopy.scale.set(0.88, 0.72, 1.32);
+      cockpitCanopy.position.set(0, -0.02, 1.48);
+      group.add(cockpitCanopy);
+
+      // 3. Merged White Tail Boom Band & Vertical Fin Stripe (1 draw call)
+      const whiteParts = [
+        bakeGeo(new THREE.CylinderGeometry(0.22, 0.25, 0.56, 16), 0, 0.22, -3.1, Math.PI / 2, 0, 0),
+        bakeGeo(new THREE.BoxGeometry(0.28, 0.22, 0.68), 0, 0.94, -4.82, -0.22, 0, 0)
+      ];
+      group.add(new THREE.Mesh(mergeGeometries(THREE, whiteParts), whiteStripeMat));
+
+      // 4. Main Rotor Assembly + Motion-Blur Disc
       const mainRotor = new THREE.Group();
-      mainRotor.position.set(0, 0.96, 0.05);
+      mainRotor.position.set(0, 1.0, 0.05);
       group.add(mainRotor);
 
-      const rotorHub = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.16, 0.2, 0.24, 24),
-        darkNavyMetal
-      );
-      mainRotor.add(rotorHub);
-
-      const bladeMat = new THREE.MeshStandardMaterial({
-        color: 0x334155,
-        metalness: 0.65,
-        roughness: 0.3
-      });
-      const blade1 = new THREE.Mesh(new THREE.BoxGeometry(8.4, 0.03, 0.24), bladeMat);
-      const blade2 = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.03, 8.4), bladeMat);
-      mainRotor.add(blade1, blade2);
+      const bladeMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.65, roughness: 0.3 });
+      const bladesGeo = mergeGeometries(THREE, [
+        bakeGeo(new THREE.CylinderGeometry(0.15, 0.19, 0.24, 14), 0, -0.04, 0),
+        bakeGeo(new THREE.BoxGeometry(8.4, 0.03, 0.24)),
+        bakeGeo(new THREE.BoxGeometry(0.24, 0.03, 8.4))
+      ]);
+      mainRotor.add(new THREE.Mesh(bladesGeo, bladeMat));
 
       const blurDiscMat = new THREE.MeshBasicMaterial({
         map: textures.rotorBlur || null,
@@ -2654,80 +3090,72 @@
         side: THREE.DoubleSide,
         depthWrite: false
       });
-      const mainBlurDisc = new THREE.Mesh(
-        new THREE.CircleGeometry(4.2, 36),
-        blurDiscMat
-      );
+      const mainBlurDisc = new THREE.Mesh(new THREE.CircleGeometry(4.2, 28), blurDiscMat);
       mainBlurDisc.rotation.x = -Math.PI / 2;
       mainRotor.add(mainBlurDisc);
 
-      // 6. Tail Rotor Assembly + Motion-Blur Disc
+      // 5. Tail Rotor Assembly + Motion-Blur Disc
       const tailRotor = new THREE.Group();
-      tailRotor.position.set(0.2, 0.66, -4.92);
+      tailRotor.position.set(0.24, 0.72, -4.86);
       group.add(tailRotor);
 
-      const tBlade1 = new THREE.Mesh(new THREE.BoxGeometry(0.035, 1.45, 0.14), bladeMat);
-      const tBlade2 = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.14, 1.45), bladeMat);
-      tailRotor.add(tBlade1, tBlade2);
+      const tailBladesGeo = mergeGeometries(THREE, [
+        bakeGeo(new THREE.BoxGeometry(0.035, 1.45, 0.14)),
+        bakeGeo(new THREE.BoxGeometry(0.035, 0.14, 1.45))
+      ]);
+      tailRotor.add(new THREE.Mesh(tailBladesGeo, bladeMat));
 
-      const tailBlurDisc = new THREE.Mesh(
-        new THREE.CircleGeometry(0.72, 24),
-        blurDiscMat
-      );
+      const tailBlurDisc = new THREE.Mesh(new THREE.CircleGeometry(0.72, 18), blurDiscMat);
       tailBlurDisc.rotation.y = Math.PI / 2;
       tailRotor.add(tailBlurDisc);
 
-      // 7. Subtle Red & Blue Belly Beacon Strobes
+      // 6. Red & Blue Belly Beacon Strobes
       const redStrobeMat = new THREE.MeshBasicMaterial({ color: 0xff1e27 });
       const blueStrobeMat = new THREE.MeshBasicMaterial({ color: 0x0088ff });
 
-      const redLight = new THREE.Mesh(
-        new THREE.SphereGeometry(0.085, 14, 14),
-        redStrobeMat
-      );
+      const redLight = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 10), redStrobeMat);
       redLight.position.set(-0.38, -0.74, 0.45);
       group.add(redLight);
 
-      const blueLight = new THREE.Mesh(
-        new THREE.SphereGeometry(0.085, 14, 14),
-        blueStrobeMat
-      );
+      const blueLight = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 10), blueStrobeMat);
       blueLight.position.set(0.38, -0.74, 0.45);
       group.add(blueLight);
 
-      // 8. Under-Nose Gimbal Searchlight Housing + Realistic White Searchlight Cone (#eef6ff, opacity 0.14)
+      // 7. Under-Nose Gimbal Searchlight Housing + Soft Searchlight Cone
       const gimbal = new THREE.Group();
       gimbal.position.set(0, -0.64, 1.45);
       group.add(gimbal);
 
       const gimbalHousing = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.16, 0.2, 0.32, 24),
+        new THREE.CylinderGeometry(0.16, 0.2, 0.32, 16),
         darkNavyMetal
       );
       gimbalHousing.rotation.x = Math.PI / 2;
       gimbal.add(gimbalHousing);
 
       const gimbalLens = new THREE.Mesh(
-        new THREE.CircleGeometry(0.15, 20),
+        new THREE.CircleGeometry(0.15, 14),
         new THREE.MeshBasicMaterial({ color: 0xffffff })
       );
       gimbalLens.position.set(0, 0, 0.17);
       gimbal.add(gimbalLens);
 
-      const coneGeo = new THREE.ConeGeometry(4.2, 18.5, 28, 1, true);
+      const coneGeo = new THREE.ConeGeometry(4.2, 18.5, 22, 1, true);
       coneGeo.translate(0, -9.25, 0);
-      const coneMat = new THREE.MeshBasicMaterial({
-        color: 0xeef6ff,
-        transparent: true,
-        opacity: 0.14,
-        side: THREE.DoubleSide,
-        depthWrite: false
-      });
-      const lightCone = new THREE.Mesh(coneGeo, coneMat);
+      const lightCone = new THREE.Mesh(
+        coneGeo,
+        new THREE.MeshBasicMaterial({
+          color: 0xeef6ff,
+          transparent: true,
+          opacity: 0.14,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+      );
       lightCone.position.set(0, -0.64, 1.45);
       group.add(lightCone);
 
-      const spotLight = new THREE.SpotLight(0xeef6ff, 2.9, 54, Math.PI / 6, 0.52, 1.0);
+      const spotLight = new THREE.SpotLight(0xeef6ff, 2.6, 54, Math.PI / 6, 0.52, 1.0);
       spotLight.position.set(0, -0.64, 1.45);
       group.add(spotLight);
 
@@ -2745,7 +3173,6 @@
       };
 
       group.userData = Object.assign({}, group.userData, refs);
-
       return Object.assign({ group, refs }, refs);
     }
   };

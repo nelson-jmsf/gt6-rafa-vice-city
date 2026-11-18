@@ -7,45 +7,63 @@
   'use strict';
 
   const QUALITY_PRESETS = {
-    ULTRA: {
-      name: 'ULTRA',
-      label: '3D ULTRA HD',
-      usePostFX: true,
-      bloomIterations: 2,
-      bloomScale: 0.5,
-      pixelRatioMax: 2.0,
-      shadows: true,
-      rainCount: 420,
-      streakCount: 70,
-      anisotropy: 16
-    },
     HIGH: {
       name: 'HIGH',
-      label: '3D HIGH',
+      label: '60FPS HD',
+      usePostFX: false,
+      bloomIterations: 0,
+      bloomScale: 0.35,
+      pixelRatioMax: 1.25,
+      shadows: false,
+      rainCount: 140,
+      streakCount: 32,
+      anisotropy: 4
+    },
+    ULTRA: {
+      name: 'ULTRA',
+      label: 'ULTRA BLOOM',
       usePostFX: true,
       bloomIterations: 1,
-      bloomScale: 0.4,
+      bloomScale: 0.35,
       pixelRatioMax: 1.5,
-      shadows: true,
-      rainCount: 260,
-      streakCount: 45,
+      shadows: false,
+      rainCount: 140,
+      streakCount: 32,
       anisotropy: 8
     },
     PERFORMANCE: {
       name: 'PERFORMANCE',
-      label: '3D 60FPS',
+      label: 'ULTRA LEVE',
       usePostFX: false,
       bloomIterations: 0,
       bloomScale: 0.25,
       pixelRatioMax: 1.0,
       shadows: false,
-      rainCount: 120,
-      streakCount: 24,
+      rainCount: 90,
+      streakCount: 20,
       anisotropy: 2
     }
   };
 
-  const QUALITY_ORDER = ['ULTRA', 'HIGH', 'PERFORMANCE'];
+  const QUALITY_ORDER = ['HIGH', 'ULTRA', 'PERFORMANCE'];
+
+  function normalizeQualityPreset(presetName) {
+    const raw = String(presetName || 'HIGH').toUpperCase().trim();
+    if (
+      raw === 'PERFORMANCE' ||
+      raw.includes('PERF') ||
+      raw.includes('LEVE') ||
+      raw === 'LOW' ||
+      raw === 'FAST' ||
+      raw === '3D 60FPS'
+    ) {
+      return 'PERFORMANCE';
+    }
+    if (raw === 'ULTRA' || raw.includes('BLOOM') || raw === '3D ULTRA' || raw === '3D ULTRA HD') {
+      return 'ULTRA';
+    }
+    return 'HIGH';
+  }
 
   // ---------------------------------------------------------------------------
   // GLSL SHADERS (Three.js r128 WebGL 1 / 2 Compatible)
@@ -479,8 +497,8 @@
       this.renderer = renderer || null;
       this.scene = scene || null;
       this.camera = camera || null;
-      this.quality = 'ULTRA';
-      this.enabled = true;
+      this.quality = 'HIGH';
+      this.enabled = false;
       this.targetsReady = false;
       this.width = 1280;
       this.height = 720;
@@ -498,8 +516,9 @@
       this.blurMat = null;
       this.compositeMat = null;
 
+      // Apply default HIGH (60FPS HD) renderer caps; offscreen targets stay lazy until ULTRA is enabled
       if (this.renderer) {
-        this._initPipeline();
+        this.setQuality(this.quality);
       }
     }
 
@@ -520,7 +539,7 @@
         this.width = Math.max(64, Math.floor((sizeVec.x || 1280) * pixelRatio));
         this.height = Math.max(64, Math.floor((sizeVec.y || 720) * pixelRatio));
 
-        const preset = QUALITY_PRESETS[this.quality] || QUALITY_PRESETS.ULTRA;
+        const preset = QUALITY_PRESETS[this.quality] || QUALITY_PRESETS.HIGH;
         const bloomW = Math.max(32, Math.floor(this.width * preset.bloomScale));
         const bloomH = Math.max(32, Math.floor(this.height * preset.bloomScale));
 
@@ -610,7 +629,7 @@
     resize(width, height) {
       if (!width || !height) return;
       if (!this.targetsReady) {
-        if (this.renderer) this._initPipeline();
+        if (this.enabled && this.renderer) this._initPipeline();
         if (!this.targetsReady) return;
       }
 
@@ -622,7 +641,7 @@
         this.width = Math.max(64, Math.floor(width * pixelRatio));
         this.height = Math.max(64, Math.floor(height * pixelRatio));
 
-        const preset = QUALITY_PRESETS[this.quality] || QUALITY_PRESETS.ULTRA;
+        const preset = QUALITY_PRESETS[this.quality] || QUALITY_PRESETS.HIGH;
         const bloomW = Math.max(32, Math.floor(this.width * preset.bloomScale));
         const bloomH = Math.max(32, Math.floor(this.height * preset.bloomScale));
 
@@ -638,25 +657,28 @@
     }
 
     /**
-     * Set active quality preset ('ULTRA' | 'HIGH' | 'PERFORMANCE').
+     * Set active quality preset ('HIGH' | 'ULTRA' | 'PERFORMANCE').
      * @param {string} presetName
      */
     setQuality(presetName) {
-      const upper = String(presetName || 'ULTRA').toUpperCase();
-      const preset = QUALITY_PRESETS[upper] ? upper : 'ULTRA';
+      const preset = normalizeQualityPreset(presetName);
       this.quality = preset;
       const cfg = QUALITY_PRESETS[preset];
-      this.enabled = cfg.usePostFX;
+      this.enabled = Boolean(cfg.usePostFX);
 
       if (this.renderer && typeof this.renderer.setPixelRatio === 'function') {
         const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
         this.renderer.setPixelRatio(Math.min(dpr, cfg.pixelRatioMax));
       }
       if (this.renderer && this.renderer.shadowMap) {
-        this.renderer.shadowMap.enabled = cfg.shadows;
+        this.renderer.shadowMap.enabled = Boolean(cfg.shadows);
       }
 
-      if (this.targetsReady && this.renderer && typeof this.renderer.getSize === 'function') {
+      if (this.enabled && !this.targetsReady && this.renderer) {
+        this._initPipeline();
+      }
+
+      if (this.targetsReady && this.renderer && typeof this.renderer.getSize === 'function' && window.THREE) {
         const THREE = window.THREE;
         const sizeVec = new THREE.Vector2(this.width, this.height);
         this.renderer.getSize(sizeVec);
@@ -709,7 +731,7 @@
       const safeDt = Math.min(Math.max(Number(dt) || 0.016, 0.001), 0.1);
       this.elapsedTime += safeDt;
 
-      const preset = QUALITY_PRESETS[this.quality] || QUALITY_PRESETS.ULTRA;
+      const preset = QUALITY_PRESETS[this.quality] || QUALITY_PRESETS.HIGH;
       const canUseTargets =
         this.enabled &&
         preset.usePostFX &&
@@ -836,10 +858,11 @@
   }
 
   /**
-   * Generates high-resolution (1024x1024) procedural PBR textures (`map`, `roughnessMap`,
-   * `bumpMap`, `normalMap`, plus a pre-configured `material`) for the 4-lane wet Vice City highway.
+   * Generates procedural wet-asphalt textures (`map`, `roughnessMap`, plus a pre-configured `material`)
+   * with realistic micro-grain, crisp double-yellow & dashed white highway markings, and rain sheen puddles
+   * without heavy `bumpMap`/`normalMap` fragment shader overhead.
    * @param {THREE.WebGLRenderer} [renderer]
-   * @returns {{ map: THREE.CanvasTexture, roughnessMap: THREE.CanvasTexture, bumpMap: THREE.CanvasTexture, normalMap: THREE.CanvasTexture, material: THREE.MeshStandardMaterial }}
+   * @returns {{ map: THREE.CanvasTexture, roughnessMap: THREE.CanvasTexture, bumpMap: null, normalMap: null, material: THREE.MeshStandardMaterial }}
    */
   function createWetAsphaltTextures(renderer) {
     if (typeof window === 'undefined' || !window.THREE) return {};
@@ -851,116 +874,108 @@
 
     const size = 1024;
 
-    // 1. Albedo / Diffuse Map (Dark wet asphalt aggregate #111318, tire wear tracks, realistic highway lane markings)
+    // 1. Albedo / Diffuse Map (Dark wet asphalt aggregate #101319, micro-grain, tire tracks, lane markings)
     const mapCanvas = document.createElement('canvas');
     mapCanvas.width = size;
     mapCanvas.height = size;
     const mctx = mapCanvas.getContext('2d');
 
-    // 2. Roughness Map (Dark = glossy wet puddles 0.08 roughness; Mid = damp asphalt 0.48 roughness)
+    // 2. Roughness Map (Dark = glossy wet rain sheen puddles ~0.08; Mid = damp asphalt ~0.46)
     const roughCanvas = document.createElement('canvas');
     roughCanvas.width = size;
     roughCanvas.height = size;
     const rctx = roughCanvas.getContext('2d');
 
-    // 3. Bump / Micro-grain Map (Fine asphalt aggregate noise for grazing headlight & streetlamp specular)
-    const bumpCanvas = document.createElement('canvas');
-    bumpCanvas.width = size;
-    bumpCanvas.height = size;
-    const bctx = bumpCanvas.getContext('2d');
-
-    if (mctx && rctx && bctx) {
-      // Base dark wet asphalt tone (#111318)
-      mctx.fillStyle = '#111318';
+    if (mctx && rctx) {
+      // Base dark wet asphalt tone (#101319)
+      mctx.fillStyle = '#101319';
       mctx.fillRect(0, 0, size, size);
 
-      // Base damp asphalt roughness (0.48 -> rgb(122,122,122))
-      rctx.fillStyle = 'rgb(122, 122, 122)';
+      // Base damp asphalt roughness (0.46 -> rgb(118,118,118))
+      rctx.fillStyle = 'rgb(118, 118, 118)';
       rctx.fillRect(0, 0, size, size);
-
-      // Base bump neutral grey
-      bctx.fillStyle = 'rgb(128, 128, 128)';
-      bctx.fillRect(0, 0, size, size);
 
       // Glossy wheel wear tracks along the 4 lanes
       const laneCenters = [0.14, 0.38, 0.62, 0.86];
-      laneCenters.forEach((lx) => {
-        const cx = lx * size;
+      for (let l = 0; l < laneCenters.length; l++) {
+        const cx = laneCenters[l] * size;
         const trackGrad = mctx.createLinearGradient(cx - 85, 0, cx + 85, 0);
         trackGrad.addColorStop(0, 'rgba(12, 14, 18, 0.0)');
-        trackGrad.addColorStop(0.3, 'rgba(8, 10, 14, 0.5)');
+        trackGrad.addColorStop(0.3, 'rgba(8, 10, 14, 0.48)');
         trackGrad.addColorStop(0.5, 'rgba(20, 24, 32, 0.22)');
-        trackGrad.addColorStop(0.7, 'rgba(8, 10, 14, 0.5)');
+        trackGrad.addColorStop(0.7, 'rgba(8, 10, 14, 0.48)');
         trackGrad.addColorStop(1, 'rgba(12, 14, 18, 0.0)');
         mctx.fillStyle = trackGrad;
         mctx.fillRect(cx - 85, 0, 170, size);
 
-        // Smoother, wetter roughness in tire tracks (0.18 -> rgb(46,46,46))
         const roughTrack = rctx.createLinearGradient(cx - 80, 0, cx + 80, 0);
-        roughTrack.addColorStop(0, 'rgba(32, 32, 32, 0.0)');
-        roughTrack.addColorStop(0.35, 'rgba(32, 32, 32, 0.68)');
-        roughTrack.addColorStop(0.65, 'rgba(32, 32, 32, 0.68)');
-        roughTrack.addColorStop(1, 'rgba(32, 32, 32, 0.0)');
+        roughTrack.addColorStop(0, 'rgba(36, 36, 36, 0.0)');
+        roughTrack.addColorStop(0.35, 'rgba(36, 36, 36, 0.64)');
+        roughTrack.addColorStop(0.65, 'rgba(36, 36, 36, 0.64)');
+        roughTrack.addColorStop(1, 'rgba(36, 36, 36, 0.0)');
         rctx.fillStyle = roughTrack;
         rctx.fillRect(cx - 80, 0, 160, size);
-      });
+      }
 
-      // Rain puddles (low roughness ~0.07 -> rgb(18, 18, 18) for mirror-like streetlamp & police light reflections)
-      for (let i = 0; i < 36; i++) {
+      // Subtle nocturnal rain sheen puddles for mirror-like streetlamp & police strobe reflections
+      for (let i = 0; i < 28; i++) {
         const px = pseudoRand(i * 3.1 + 1) * size;
         const py = pseudoRand(i * 7.3 + 2) * size;
-        const rx = 45 + pseudoRand(i * 11.7) * 115;
-        const ry = 70 + pseudoRand(i * 17.9) * 185;
+        const rx = 42 + pseudoRand(i * 11.7) * 105;
+        const ry = 65 + pseudoRand(i * 17.9) * 175;
+        const rad = Math.max(rx, ry);
 
-        const pGrad = rctx.createRadialGradient(px, py, rx * 0.1, px, py, Math.max(rx, ry));
-        pGrad.addColorStop(0, 'rgba(16, 16, 16, 0.94)');
-        pGrad.addColorStop(0.65, 'rgba(24, 24, 24, 0.80)');
-        pGrad.addColorStop(1, 'rgba(122, 122, 122, 0.0)');
+        const pGrad = rctx.createRadialGradient(px, py, rx * 0.1, px, py, rad);
+        pGrad.addColorStop(0, 'rgba(18, 18, 18, 0.90)');
+        pGrad.addColorStop(0.65, 'rgba(28, 28, 28, 0.72)');
+        pGrad.addColorStop(1, 'rgba(118, 118, 118, 0.0)');
         rctx.fillStyle = pGrad;
         rctx.beginPath();
-        rctx.arc(px, py, Math.max(rx, ry), 0, Math.PI * 2);
+        rctx.arc(px, py, rad, 0, Math.PI * 2);
         rctx.fill();
 
-        const mGrad = mctx.createRadialGradient(px, py, rx * 0.1, px, py, Math.max(rx, ry));
-        mGrad.addColorStop(0, 'rgba(10, 13, 18, 0.65)');
-        mGrad.addColorStop(1, 'rgba(17, 19, 24, 0.0)');
+        const mGrad = mctx.createRadialGradient(px, py, rx * 0.1, px, py, rad);
+        mGrad.addColorStop(0, 'rgba(9, 12, 17, 0.62)');
+        mGrad.addColorStop(1, 'rgba(16, 19, 25, 0.0)');
         mctx.fillStyle = mGrad;
         mctx.beginPath();
-        mctx.arc(px, py, Math.max(rx, ry), 0, Math.PI * 2);
+        mctx.arc(px, py, rad, 0, Math.PI * 2);
         mctx.fill();
       }
 
-      // Fine asphalt aggregate speckles & micro-grain bump
-      for (let i = 0; i < 5500; i++) {
+      // Subtle realistic asphalt micro-grain baked directly into diffuse & roughness (zero bumpMap shader cost)
+      const grainPalette = ['#13171f', '#171b25', '#1b202b', '#0d1016'];
+      for (let i = 0; i < 3600; i++) {
         const gx = pseudoRand(i * 1.13) * size;
         const gy = pseudoRand(i * 2.71) * size;
-        const gw = 1 + (i % 3);
-        const shade = 14 + (i % 20);
-        mctx.fillStyle = `rgb(${shade}, ${shade + 2}, ${shade + 5})`;
+        const gw = 1 + (i & 1);
+        mctx.fillStyle = grainPalette[i & 3];
         mctx.fillRect(gx, gy, gw, gw);
-
-        const bumpVal = 98 + ((i * 29) % 64);
-        bctx.fillStyle = `rgb(${bumpVal}, ${bumpVal}, ${bumpVal})`;
-        bctx.fillRect(gx, gy, gw, gw);
+        if ((i & 3) === 0) {
+          rctx.fillStyle = 'rgba(145, 145, 145, 0.25)';
+          rctx.fillRect(gx, gy, gw, gw);
+        }
       }
 
       // Realistic Concrete Gutter / Curb Shoulder Borders at outer edges
-      mctx.fillStyle = '#252a34';
+      mctx.fillStyle = '#242934';
       mctx.fillRect(0, 0, 26, size);
       mctx.fillRect(size - 26, 0, 26, size);
 
       // Outer solid white highway edge lines
-      mctx.fillStyle = 'rgba(226, 232, 240, 0.84)';
+      mctx.fillStyle = 'rgba(232, 238, 246, 0.88)';
       mctx.fillRect(36, 0, 9, size);
       mctx.fillRect(size - 45, 0, 9, size);
 
-      // Center Double Yellow Highway Divider Stripes
-      mctx.fillStyle = '#e0a816';
-      mctx.fillRect(size * 0.5 - 15, 0, 9, size);
-      mctx.fillRect(size * 0.5 + 6, 0, 9, size);
+      // Center Double Yellow Highway Divider Stripes with crisp asphalt separation
+      mctx.fillStyle = '#0c0f14';
+      mctx.fillRect(size * 0.5 - 18, 0, 36, size);
+      mctx.fillStyle = '#e6af1c';
+      mctx.fillRect(size * 0.5 - 14, 0, 9, size);
+      mctx.fillRect(size * 0.5 + 5, 0, 9, size);
 
-      // Dashed White Lane Dividers (at 25% and 75% across the 4-lane highway)
-      mctx.fillStyle = 'rgba(230, 236, 245, 0.85)';
+      // Crisp Dashed White Lane Dividers (at 25% and 75% across the 4-lane highway)
+      mctx.fillStyle = 'rgba(236, 242, 250, 0.90)';
       const dashCount = 8;
       const dashStride = size / dashCount;
       for (let d = 0; d < dashCount; d++) {
@@ -971,19 +986,21 @@
       }
     }
 
-    const maxAnisotropy =
+    const preset = QUALITY_PRESETS[GT6PostFX.quality] || QUALITY_PRESETS.HIGH;
+    const hwAnisotropy =
       renderer &&
       renderer.capabilities &&
       typeof renderer.capabilities.getMaxAnisotropy === 'function'
-        ? Math.min(16, renderer.capabilities.getMaxAnisotropy())
+        ? renderer.capabilities.getMaxAnisotropy()
         : 8;
+    const targetAnisotropy = Math.min(preset.anisotropy || 4, hwAnisotropy);
 
     function configureRepeatingTexture(canvas, isSRGB) {
       const tex = new THREE.CanvasTexture(canvas);
       tex.wrapS = THREE.RepeatWrapping;
       tex.wrapT = THREE.RepeatWrapping;
       tex.repeat.set(1, 4);
-      tex.anisotropy = maxAnisotropy;
+      tex.anisotropy = targetAnisotropy;
       if (isSRGB && THREE.sRGBEncoding !== undefined) {
         tex.encoding = THREE.sRGBEncoding;
       }
@@ -993,28 +1010,94 @@
 
     const map = configureRepeatingTexture(mapCanvas, true);
     const roughnessMap = configureRepeatingTexture(roughCanvas, false);
-    const bumpMap = configureRepeatingTexture(bumpCanvas, false);
 
+    // Lightweight PBR material without bumpMap/normalMap screen-space derivative overhead
     const material = new THREE.MeshStandardMaterial({
       map: map,
       roughnessMap: roughnessMap,
-      bumpMap: bumpMap,
-      bumpScale: 0.015,
-      roughness: 0.34,
-      metalness: 0.26,
-      envMapIntensity: 1.65
+      roughness: 0.36,
+      metalness: 0.24,
+      envMapIntensity: 1.45
     });
 
     const result = {
       map: map,
       roughnessMap: roughnessMap,
-      bumpMap: bumpMap,
-      normalMap: bumpMap,
+      bumpMap: null,
+      normalMap: null,
       material: material
     };
 
     GT6PostFX._cachedAsphalt = result;
     return result;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 3B. ZERO-PASS ADDITIVE GLOW SPRITE HELPERS (HEADLIGHTS, SIRENS, NEON, SPARKS)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Creates and caches a smooth radial glow CanvasTexture for lightweight additive bloom sprites.
+   * @returns {THREE.CanvasTexture|null}
+   */
+  function createGlowTexture() {
+    if (typeof window === 'undefined' || !window.THREE) return null;
+    const THREE = window.THREE;
+
+    if (GT6PostFX._cachedGlowTexture) {
+      return GT6PostFX._cachedGlowTexture;
+    }
+
+    const size = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    if (ctx) {
+      const half = size * 0.5;
+      const grad = ctx.createRadialGradient(half, half, 0, half, half, half);
+      grad.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+      grad.addColorStop(0.16, 'rgba(255, 255, 255, 0.86)');
+      grad.addColorStop(0.36, 'rgba(255, 255, 255, 0.42)');
+      grad.addColorStop(0.65, 'rgba(255, 255, 255, 0.12)');
+      grad.addColorStop(0.86, 'rgba(255, 255, 255, 0.025)');
+      grad.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, size, size);
+    }
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+
+    GT6PostFX._cachedGlowTexture = tex;
+    return tex;
+  }
+
+  /**
+   * Creates a lightweight additive THREE.SpriteMaterial for bloom halos with zero fullscreen blur passes.
+   * @param {number|string} [colorHex=0xffffff]
+   * @param {number} [opacity=0.85]
+   * @returns {THREE.SpriteMaterial|null}
+   */
+  function createGlowSpriteMaterial(colorHex = 0xffffff, opacity = 0.85) {
+    if (typeof window === 'undefined' || !window.THREE) return null;
+    const THREE = window.THREE;
+    const tex = createGlowTexture();
+
+    return new THREE.SpriteMaterial({
+      map: tex,
+      color: colorHex !== undefined ? colorHex : 0xffffff,
+      transparent: true,
+      opacity: typeof opacity === 'number' ? opacity : 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      fog: false
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1058,8 +1141,8 @@
     skyDome.renderOrder = -10;
     group.add(skyDome);
 
-    // 2. Subtle Nocturnal Mist / Fine Drizzle Streaks
-    const rainCount = 420;
+    // 2. Subtle Nocturnal Mist / Fine Drizzle Streaks (140 max particles)
+    const rainCount = 140;
     const rainPositions = new Float32Array(rainCount * 6);
     const rainColors = new Float32Array(rainCount * 6);
     const rainSeeds = new Float32Array(rainCount * 3);
@@ -1082,13 +1165,12 @@
       rainPositions[idx + 5] = z + 0.55;
 
       // Subtle silver-grey wet night rain reflections
-      const tint = [0.68, 0.75, 0.85];
-      rainColors[idx] = tint[0] * 0.25;
-      rainColors[idx + 1] = tint[1] * 0.25;
-      rainColors[idx + 2] = tint[2] * 0.25;
-      rainColors[idx + 3] = tint[0];
-      rainColors[idx + 4] = tint[1];
-      rainColors[idx + 5] = tint[2];
+      rainColors[idx] = 0.17;
+      rainColors[idx + 1] = 0.1875;
+      rainColors[idx + 2] = 0.2125;
+      rainColors[idx + 3] = 0.68;
+      rainColors[idx + 4] = 0.75;
+      rainColors[idx + 5] = 0.85;
     }
 
     const rainGeo = new THREE.BufferGeometry();
@@ -1100,15 +1182,16 @@
       transparent: true,
       opacity: 0.16,
       blending: THREE.AdditiveBlending,
-      depthWrite: false
+      depthWrite: false,
+      fog: false
     });
     const rain = new THREE.LineSegments(rainGeo, rainMat);
     rain.name = 'ViceCityRain';
     rain.frustumCulled = false;
     group.add(rain);
 
-    // 3. Subtle High-Speed Wind / Streetlamp Specular Streaks at high km/h & Nitro
-    const streakCount = 70;
+    // 3. Subtle High-Speed Wind / Streetlamp Specular Streaks at high km/h & Nitro (32 max particles)
+    const streakCount = 32;
     const streakPositions = new Float32Array(streakCount * 6);
     const streakColors = new Float32Array(streakCount * 6);
     const streakSeeds = new Float32Array(streakCount * 4);
@@ -1134,15 +1217,17 @@
       streakPositions[idx + 5] = z + len;
 
       // Soft warm-white / ice-blue wind streaks
-      let c = [0.82, 0.90, 1.0];
-      if (i % 3 === 0) c = [1.0, 0.88, 0.72];
+      const isWarm = i % 3 === 0;
+      const cr = isWarm ? 1.0 : 0.82;
+      const cg = isWarm ? 0.88 : 0.90;
+      const cb = isWarm ? 0.72 : 1.0;
 
-      streakColors[idx] = c[0] * 0.08;
-      streakColors[idx + 1] = c[1] * 0.08;
-      streakColors[idx + 2] = c[2] * 0.08;
-      streakColors[idx + 3] = c[0];
-      streakColors[idx + 4] = c[1];
-      streakColors[idx + 5] = c[2];
+      streakColors[idx] = cr * 0.08;
+      streakColors[idx + 1] = cg * 0.08;
+      streakColors[idx + 2] = cb * 0.08;
+      streakColors[idx + 3] = cr;
+      streakColors[idx + 4] = cg;
+      streakColors[idx + 5] = cb;
     }
 
     const streakGeo = new THREE.BufferGeometry();
@@ -1154,7 +1239,8 @@
       transparent: true,
       opacity: 0.24,
       blending: THREE.AdditiveBlending,
-      depthWrite: false
+      depthWrite: false,
+      fog: false
     });
     const speedStreaks = new THREE.LineSegments(streakGeo, streakMat);
     speedStreaks.name = 'ViceCitySpeedStreaks';
@@ -1166,13 +1252,35 @@
     }
 
     let elapsed = 0;
+    let activeRain = rainCount;
+    let activeStreaks = streakCount;
+
+    function applyQuality(presetName) {
+      const key = normalizeQualityPreset(presetName || GT6PostFX.quality);
+      const preset = QUALITY_PRESETS[key] || QUALITY_PRESETS.HIGH;
+      activeRain = Math.min(rainCount, preset.rainCount || rainCount);
+      activeStreaks = Math.min(streakCount, preset.streakCount || streakCount);
+      rain.visible = activeRain > 0;
+      if (typeof rainGeo.setDrawRange === 'function') {
+        rainGeo.setDrawRange(0, activeRain * 2);
+      }
+      if (typeof streakGeo.setDrawRange === 'function') {
+        streakGeo.setDrawRange(0, activeStreaks * 2);
+      }
+    }
+
+    applyQuality(GT6PostFX.quality);
 
     function update(arg1, arg2, camera) {
       let state = null;
       let dt = 0.016;
+      let speedRatio = 0.45;
+      let isBoosting = false;
+      let roadCurve = 0;
+
       if (typeof arg1 === 'number' && (typeof arg2 === 'object' || arg2 === undefined)) {
         if (typeof arg2 === 'number') {
-          state = { speedRatio: arg1 };
+          speedRatio = arg1;
           dt = arg2;
         } else {
           dt = arg1;
@@ -1183,7 +1291,7 @@
         dt = typeof arg2 === 'number' ? arg2 : 0.016;
       }
 
-      const safeDt = Math.min(Math.max(Number(dt) || 0.016, 0.001), 0.1);
+      const safeDt = Math.min(Math.max(Number(dt) || 0.016, 0.001), 0.05);
       elapsed += safeDt;
 
       if (skyMat.uniforms && skyMat.uniforms.uTime) {
@@ -1195,9 +1303,6 @@
         skyDome.position.z = camera.position.z;
       }
 
-      let speedRatio = 0.45;
-      let isBoosting = false;
-      let roadCurve = 0;
       if (state && typeof state === 'object') {
         if (typeof state.speedRatio === 'number') {
           speedRatio = state.speedRatio;
@@ -1210,11 +1315,10 @@
         }
       }
 
-      const preset = QUALITY_PRESETS[GT6PostFX.quality] || QUALITY_PRESETS.ULTRA;
       const forwardSpeed = 28 + speedRatio * 75 + (isBoosting ? 55 : 0);
 
-      // Update 3D Mist Rain
-      if (rain.visible) {
+      // Update 3D Mist Rain (typed-array loop, zero allocations)
+      if (rain.visible && activeRain > 0) {
         const posAttr = rainGeo.getAttribute('position');
         const arr = posAttr.array;
         const dropVelY = 22.0;
@@ -1222,11 +1326,11 @@
         const streakLenY = 0.7 + speedRatio * 0.4;
         const streakLenZ = 0.4 + speedRatio * 1.2 + (isBoosting ? 0.9 : 0);
 
-        const activeRain = Math.min(rainCount, preset.rainCount || rainCount);
         for (let i = 0; i < activeRain; i++) {
-          const baseX = rainSeeds[i * 3];
-          let y = rainSeeds[i * 3 + 1] - dropVelY * safeDt;
-          let z = rainSeeds[i * 3 + 2] + dropVelZ * safeDt;
+          const seedBase = i * 3;
+          const baseX = rainSeeds[seedBase];
+          let y = rainSeeds[seedBase + 1] - dropVelY * safeDt;
+          let z = rainSeeds[seedBase + 2] + dropVelZ * safeDt;
 
           if (y < 0.05) {
             y += 24.0;
@@ -1235,11 +1339,11 @@
             z -= 125.0;
           }
 
-          rainSeeds[i * 3 + 1] = y;
-          rainSeeds[i * 3 + 2] = z;
+          rainSeeds[seedBase + 1] = y;
+          rainSeeds[seedBase + 2] = z;
 
-          const curveX = roadCurve * Math.pow(z / 100, 2) * 28;
-          const x = baseX + curveX;
+          const zn = z * 0.01;
+          const x = baseX + roadCurve * (zn * zn) * 28;
 
           const idx = i * 6;
           arr[idx] = x;
@@ -1252,8 +1356,8 @@
         posAttr.needsUpdate = true;
       }
 
-      // Update 3D High-Speed Streaks (only visible at high speed or Nitro)
-      const showStreaks = speedRatio > 0.55 || isBoosting;
+      // Update 3D High-Speed Streaks (typed-array loop, zero allocations)
+      const showStreaks = (speedRatio > 0.55 || isBoosting) && activeStreaks > 0;
       speedStreaks.visible = showStreaks;
       if (showStreaks) {
         streakMat.opacity = Math.min(
@@ -1265,20 +1369,22 @@
         const streakSpeed = forwardSpeed * 1.4;
         const lengthMul = 0.75 + speedRatio * 1.3 + (isBoosting ? 1.2 : 0);
 
-        const activeStreaks = Math.min(streakCount, preset.streakCount || streakCount);
         for (let i = 0; i < activeStreaks; i++) {
-          const baseX = streakSeeds[i * 4];
-          const y = streakSeeds[i * 4 + 1];
-          let z = streakSeeds[i * 4 + 2] + streakSpeed * safeDt;
-          const baseLen = streakSeeds[i * 4 + 3] * lengthMul;
+          const seedBase = i * 4;
+          const baseX = streakSeeds[seedBase];
+          const y = streakSeeds[seedBase + 1];
+          let z = streakSeeds[seedBase + 2] + streakSpeed * safeDt;
+          const baseLen = streakSeeds[seedBase + 3] * lengthMul;
 
           if (z > 16.0) {
             z -= 140.0;
           }
-          streakSeeds[i * 4 + 2] = z;
+          streakSeeds[seedBase + 2] = z;
 
-          const curveX1 = roadCurve * Math.pow(z / 100, 2) * 28;
-          const curveX2 = roadCurve * Math.pow((z + baseLen) / 100, 2) * 28;
+          const zn1 = z * 0.01;
+          const zn2 = (z + baseLen) * 0.01;
+          const curveX1 = roadCurve * (zn1 * zn1) * 28;
+          const curveX2 = roadCurve * (zn2 * zn2) * 28;
 
           const idx = i * 6;
           sArr[idx] = baseX + curveX1;
@@ -1297,7 +1403,8 @@
       skyDome: skyDome,
       rain: rain,
       speedStreaks: speedStreaks,
-      update: update
+      update: update,
+      setQuality: applyQuality
     };
 
     GT6PostFX._activeAtmosphere = atmosphereObj;
@@ -1309,12 +1416,13 @@
   // ---------------------------------------------------------------------------
 
   const GT6PostFX = {
-    quality: 'ULTRA',
+    quality: 'HIGH',
     QUALITY_PRESETS: QUALITY_PRESETS,
     PostProcessor: PostProcessor,
 
     _cachedEnvMap: null,
     _cachedAsphalt: null,
+    _cachedGlowTexture: null,
     _activeProcessor: null,
     _activeAtmosphere: null,
 
@@ -1334,6 +1442,10 @@
     },
 
     createEnvMap: createEnvMap,
+
+    createGlowTexture: createGlowTexture,
+
+    createGlowSpriteMaterial: createGlowSpriteMaterial,
 
     render(arg1, arg2, arg3, arg4, arg5) {
       if (!this._activeProcessor) {
@@ -1362,18 +1474,39 @@
       }
     },
 
-    setQuality(preset) {
-      const upper = String(preset || 'ULTRA').toUpperCase();
-      const valid = QUALITY_PRESETS[upper] ? upper : 'ULTRA';
+    setQuality(preset, renderer) {
+      const valid = normalizeQualityPreset(preset);
       this.quality = valid;
+      const cfg = QUALITY_PRESETS[valid];
 
       if (this._activeProcessor) {
         this._activeProcessor.setQuality(valid);
+      } else if (renderer) {
+        if (typeof renderer.setPixelRatio === 'function') {
+          const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+          renderer.setPixelRatio(Math.min(dpr, cfg.pixelRatioMax));
+        }
+        if (renderer.shadowMap) {
+          renderer.shadowMap.enabled = Boolean(cfg.shadows);
+        }
+      }
+
+      if (this._cachedAsphalt) {
+        const targetAniso = cfg.anisotropy || 4;
+        if (this._cachedAsphalt.map) {
+          this._cachedAsphalt.map.anisotropy = targetAniso;
+          this._cachedAsphalt.map.needsUpdate = true;
+        }
+        if (this._cachedAsphalt.roughnessMap) {
+          this._cachedAsphalt.roughnessMap.anisotropy = targetAniso;
+          this._cachedAsphalt.roughnessMap.needsUpdate = true;
+        }
       }
 
       if (this._activeAtmosphere) {
-        const cfg = QUALITY_PRESETS[valid];
-        if (this._activeAtmosphere.rain) {
+        if (typeof this._activeAtmosphere.setQuality === 'function') {
+          this._activeAtmosphere.setQuality(valid);
+        } else if (this._activeAtmosphere.rain) {
           this._activeAtmosphere.rain.visible = cfg.rainCount > 0;
         }
       }
@@ -1392,8 +1525,8 @@
     },
 
     getPresetConfig(preset) {
-      const key = String(preset || this.quality || 'ULTRA').toUpperCase();
-      return QUALITY_PRESETS[key] || QUALITY_PRESETS.ULTRA;
+      const key = normalizeQualityPreset(preset || this.quality);
+      return QUALITY_PRESETS[key] || QUALITY_PRESETS.HIGH;
     }
   };
 
